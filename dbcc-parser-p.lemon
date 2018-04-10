@@ -1,0 +1,912 @@
+/*
+From http://www.quut.com/c/ANSI-C-grammar-y-2011.html
+---------------------------------------------- BEGIN QUOTE
+ANSI C Yacc grammar
+(This Yacc file is accompanied by a matching Lex file.)
+In 1985, Jeff Lee published his Yacc grammar based on a draft version of the ANSI C standard, along with a supporting Lex specification. Tom Stockfisch reposted those files to net.sources in 1987; as mentioned in the answer to question 17.25 of the comp.lang.c FAQ, they used to be available from ftp.uu.net as usenet/net.sources/ansi.c.grammar.Z.
+
+The version you see here has been updated based on the 2011 ISO C standard. (The previous version's Lex and Yacc files for ANSI C9X still exist as archived copies.)
+
+This grammar assumes that translation phases 1..5 have already been completed, including preprocessing and _Pragma processing. The Lex rule for string literals will perform concatenation (translation phase 6). Transliteration of universal character names (\uHHHH or \UHHHHHHHH) must have been done by either the preprocessor or a replacement for the input() macro used by Lex (or the YY_INPUT function used by Flex) to read characters. Although comments should have been changed to space characters during translation phase 3, there are Lex rules for them anyway.
+
+I want to keep this version as close to the current C Standard grammar as possible; please let me know if you discover discrepancies.
+(There is an FAQ for this grammar that you might want to read first.)
+
+jutta@pobox.com, 2012
+
+Last edit: 2012-12-18 DAGwyn@aol.com
+
+Note: There are two shift/reduce conflicts, correctly resolved by default:
+  IF '(' expression ')' statement _ ELSE statement
+and
+  ATOMIC _ '(' type_name ')'
+where "_" has been used to flag the points of ambiguity.
+---------------------------------------------- END QUOTE
+
+ */
+
+/* Conversion to Lemon was done Mar 2018 by Dave Benson */
+%token	IDENTIFIER I_CONSTANT F_CONSTANT STRING_LITERAL FUNC_NAME SIZEOF
+%token	PTR_OP INC_OP DEC_OP LEFT_OP RIGHT_OP LE_OP GE_OP EQ_OP NE_OP
+%token	AND_OP OR_OP MUL_ASSIGN DIV_ASSIGN MOD_ASSIGN ADD_ASSIGN
+%token	SUB_ASSIGN LEFT_ASSIGN RIGHT_ASSIGN AND_ASSIGN
+%token	XOR_ASSIGN OR_ASSIGN
+%token	TYPEDEF_NAME ENUMERATION_CONSTANT
+
+%token	TYPEDEF EXTERN STATIC AUTO REGISTER INLINE
+%token	CONST RESTRICT VOLATILE
+%token	BOOL CHAR SHORT INT LONG SIGNED UNSIGNED FLOAT DOUBLE VOID
+%token	COMPLEX IMAGINARY 
+%token	STRUCT UNION ENUM ELLIPSIS
+
+%token	CASE DEFAULT IF ELSE SWITCH WHILE DO FOR GOTO CONTINUE BREAK RETURN
+
+%token	ALIGNAS ALIGNOF ATOMIC GENERIC NORETURN STATIC_ASSERT THREAD_LOCAL
+
+%start translation_unit
+%type generic_association
+%type optional_comma {int}
+%type enumeration_constant
+%type declaration
+%type external_declaration
+%type parameter_declaration
+%type static_assert_declaration
+%type struct_declaration
+%type abstract_declarator
+%type declarator
+%type direct_abstract_declarator
+%type direct_declarator
+%type init_declarator
+%type struct_declarator
+%type function_definition
+%type designation
+%type designator
+%type enumerator
+
+%type expression                    {DBCC_Expr*}
+%type additive_expression           {DBCC_Expr*}
+%type and_expression                {DBCC_Expr*}
+%type assignment_expression         {DBCC_Expr*}
+%type cast_expression               {DBCC_Expr*}
+%type conditional_expression        {DBCC_Expr*}
+%type constant_expression           {DBCC_Expr*}
+%type equality_expression           {DBCC_Expr*}
+%type exclusive_or_expression       {DBCC_Expr*}
+%type inclusive_or_expression       {DBCC_Expr*}
+%type logical_and_expression        {DBCC_Expr*}
+%type logical_or_expression         {DBCC_Expr*}
+%type multiplicative_expression     {DBCC_Expr*}
+%type postfix_expression            {DBCC_Expr*}
+%type primary_expression            {DBCC_Expr*}
+%type relational_expression         {DBCC_Expr*}
+%type shift_expression              {DBCC_Expr*}
+%type unary_expression              {DBCC_Expr*}
+
+%type initializer
+%type argument_expression_list
+%type block_item_list
+%type declaration_list
+%type designator_list
+%type enumerator_list
+%type generic_assoc_list
+%type identifier_list
+%type init_declarator_list
+%type initializer_list
+%type opt_declaration_list
+%type parameter_list
+%type parameter_type_list
+%type specifier_qualifier_list
+%type struct_declaration_list
+%type struct_declarator_list
+%type type_name
+%type assignment_operator          {DBCC_InplaceBinaryOperator}
+%type unary_operator               {DBCC_UnaryOperator}
+%type pointer
+
+%type opt_type_qualifier_list      {DBCC_TypeQualifier}
+%type type_qualifier_list          {DBCC_TypeQualifier}
+%type type_qualifier               {DBCC_TypeQualifier}
+%type generic_selection
+%type alignment_specifier
+%type atomic_type_specifier
+%type enum_specifier
+%type function_specifier
+%type storage_class_specifier
+%type struct_specifier
+%type type_specifier
+%type union_specifier
+%type declaration_specifiers
+%type opt_declaration_specifiers
+%type statement                     {DBCC_Statement*}
+%type block_item                    {DBCC_Statement*}
+%type compound_statement            {DBCC_Statement*}
+%type expression_statement          {DBCC_Statement*}
+%type iteration_statement           {DBCC_Statement*}
+%type jump_statement                {DBCC_Statement*}
+%type labeled_statement             {DBCC_Statement*}
+%type selection_statement           {DBCC_Statement*}
+%type opt_static                    {bool}
+%type string                        {DBCC_String}
+%type translation_unit
+%%
+
+primary_expression(rv) ::= IDENTIFIER(id).
+        { rv = dbcc_expr_new_symbol (id.symbol); }
+
+primary_expression(rv) ::= I_CONSTANT(c).
+        { rv = dbcc_expr_new_int_constant (...); }
+
+primary_expression(rv) ::= F_CONSTANT(c).
+        { rv = dbcc_expr_new_float_constant (...); }
+
+primary_expression(rv) ::= ENUMERATION_CONSTANT(c).
+        { rv = dbcc_expr_new_enum_constant (c->info.v_enumeration_constant); }
+
+primary_expression(rv) ::= string(s).
+        { rv = dbcc_expr_new_constant_string (s); s = NULL; }
+primary_expression(rv) ::= LPAREN expression(e) RPAREN.
+        { rv = e; e = NULL; }
+primary_expression(rv) ::= generic_selection(g).
+
+enumeration_constant(rv) ::= IDENTIFIER(s)
+	;
+
+string(rv) ::= STRING_LITERAL(s).
+        { rv = s->info.v_string_literal; s->info.v_string_literal = NULL; }
+string(rv) ::= FUNC_NAME(s).
+        { rv = s->info.v_func_name; s->info.v_func_name = NULL; }
+
+generic_selection(rv) ::= GENERIC '(' assignment_expression(expr) ',' generic_assoc_list(list) ')'.
+        { list = dbcc_generic_assoc_list_reverse (list);
+          rv = dbcc_expr_new_generic_selection (expr, list); }
+
+generic_assoc_list(list) ::= generic_association(assoc).
+        { list = assoc; assoc->next = NULL; assoc = NULL; }
+generic_assoc_list(list) ::= generic_assoc_list(in) ',' generic_association(assoc).
+        { list = assoc; assoc->next = in; in = NULL; assoc = NULL; }
+
+generic_association(assoc) ::= type_name(name) ':' assignment_expression(expr).
+        { assoc = dbcc_generic_assoc_list_new (name, expr);
+          name = NULL; expr = NULL; }
+generic_association(assoc) ::= DEFAULT ':' assignment_expression(expr).
+        { assoc = dbcc_generic_assoc_list_new_default (name, expr);
+          expr = NULL; }
+
+postfix_expression(rv) ::= primary_expression(a).
+        { rv = a; a = NULL; }
+postfix_expression(rv) ::= postfix_expression(a) '[' expression(expr) ']'.
+        { rv = dbcc_expr_new_subscript (a, expr); a = NULL; expr = NULL; }
+postfix_expression(rv) ::= postfix_expression(head) '(' ')'.
+        { rv = dbcc_expr_new_call (head, NULL); head = NULL; }
+
+postfix_expression(rv) ::= postfix_expression(head) '(' argument_expression_list(list) ')'.
+        { list = dbcc_argument_expression_list_reverse (list);
+          rv = dbcc_expr_new_call (head, list); head = NULL; list = NULL; }
+
+postfix_expression(rv) ::= postfix_expression(head) '.' IDENTIFIER(id).
+        { rv = dbcc_expr_new_member_access(head, id->info.v_symbol);
+          head = NULL; id->info.v_symbol = NULL; }
+
+postfix_expression(rv) ::= postfix_expression(head) PTR_OP IDENTIFIER(id).
+        { rv = dbcc_expr_new_pointer_access(head, id->info.v_symbol);
+          head = NULL; id->info.v_symbol = NULL; }
+postfix_expression(rv) ::= postfix_expression(head) INC_OP.
+        { rv = dbcc_expr_new_inplace_unary(DBCC_INPLACE_UNARY_OPERATOR_POST_INCR, expr); expr = NULL; }
+postfix_expression(rv) ::= postfix_expression(head) DEC_OP.
+        { rv = dbcc_expr_new_inplace_unary(DBCC_INPLACE_UNARY_OPERATOR_POST_DECR, expr); expr = NULL; }
+postfix_expression(rv) ::= '(' type_name(type) ')' '{' initializer_list(list) optional_comma '}'.
+        { rv = ... }
+
+optional_comma ::= ','.
+optional_comma ::= .
+
+argument_expression_list(list) ::= assignment_expression(expr).
+        { list = dbcc_argument_expression_list_new (expr, NULL); expr = NULL; }
+argument_expression_list(list) ::= argument_expression_list(in) ',' assignment_expression(expr).
+        { list = dbcc_argument_expression_list_new (expr, in); expr = NULL; in = NULL; }
+
+unary_expression(out) ::= postfix_expression(in).
+        { out = in; in = NULL; }
+
+unary_expression(rv) ::= INC_OP unary_expression(expr).
+        - rv = dbcc_expr_new_inplace_unary(DBCC_INPLACE_UNARY_OPERATOR_PRE_INCR, expr); expr = NULL; }
+unary_expression(rv) ::= DEC_OP unary_expression(expr).
+        { rv = dbcc_expr_new_inplace_unary(DBCC_INPLACE_UNARY_OPERATOR_PRE_DECR, expr); expr = NULL; }
+unary_expression(rv) ::= unary_operator(op) cast_expression(expr).
+        { rv = dbcc_expr_new_unary(op, expr); expr = NULL; }
+unary_expression(rv) = SIZEOF unary_expression(expr).
+        { rv = dbcc_expr_new_sizeof_expr(expr); expr = NULL; }
+unary_expression(rv) = SIZEOF '(' type_name(type) ')'.
+        { rv = dbcc_expr_new_sizeof_type(type); expr = NULL; }
+unary_expression(rv) = ALIGNOF '(' type_name(type) ')'.
+        { rv = dbcc_expr_new_alignof_type(type); expr = NULL; }
+
+unary_operator(rv) ::= '&'.
+        { rv = DBCC_UNARY_OPERATOR_REFERENCE; }
+unary_operator(rv) ::= '*'.
+        { rv = DBCC_UNARY_OPERATOR_DEREFERENCE; }
+unary_operator(rv) ::= '+'.
+        { rv = DBCC_UNARY_OPERATOR_PLUS; }
+unary_operator(rv) ::= '-'.
+        { rv = DBCC_UNARY_OPERATOR_NEGATE; }
+unary_operator(rv) ::= '~'.
+        { rv = DBCC_UNARY_OPERATOR_BITWISE_NOT; }
+unary_operator(rv) ::= '!'.
+        { rv = DBCC_UNARY_OPERATOR_LOGICAL_NOT; }
+
+cast_expression(rv) ::= unary_expression(expr).
+        { rv = expr; expr = NULL; }
+cast_expression(rv) ::= '(' type_name(type) ')' cast_expression(expr).
+        { rv = dbcc_expr_new_cast (type, expr); type = NULL; expr = NULL; }
+
+multiplicative_expression(rv) ::= cast_expression(expr).
+        { rv = expr; expr = NULL; }
+multiplicative_expression(rv) ::= multiplicative_expression(a) '*' cast_expression(b).
+        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_MUL, a, b);
+          a = b = NULL; }
+multiplicative_expression(rv) ::= multiplicative_expression(a) '/' cast_expression(b).
+        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_DIV, a, b);
+          a = b = NULL; }
+multiplicative_expression(rv) ::= multiplicative_expression(a) '%' cast_expression(b).
+        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_REMAINDER, a, b);
+          a = b = NULL; }
+
+additive_expression(rv) ::= multiplicative_expression(expr);
+        { rv = expr; expr = NULL; }
+additive_expression(rv) ::= additive_expression(a) '+' multiplicative_expression(b);
+        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_ADD, a, b);
+          a = b = NULL; }
+additive_expression(rv) ::= additive_expression(a) '-' multiplicative_expression(b);
+        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_SUB, a, b);
+          a = b = NULL; }
+
+shift_expression(rv) ::= additive_expression(expr).
+        { rv = expr; expr = NULL; }
+shift_expression(rv) ::= shift_expression(a) LEFT_OP additive_expression(b).
+        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_SHIFT_LEFT, a, b);
+          a = b = NULL; }
+shift_expression(rv) ::= shift_expression(a) RIGHT_OP additive_expression(b).
+        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_SHIFT_RIGHT, a, b);
+          a = b = NULL; }
+
+relational_expression(rv) ::= shift_expression(expr).
+        { rv = expr; expr = NULL; }
+relational_expression(rv) ::= relational_expression(a) '<' shift_expression(b).
+        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_LESS_THAN, a, b);
+          a = b = NULL; }
+relational_expression(rv) ::= relational_expression(a) '>' shift_expression(b).
+        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_GREATER_THAN, a, b);
+          a = b = NULL; }
+relational_expression(rv) ::= relational_expression(a) LE shift_expression(b).
+        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_LE, a, b);
+          a = b = NULL; }
+relational_expression(rv) ::= relational_expression(a) GE shift_expression(b).
+        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_GE, a, b);
+          a = b = NULL; }
+
+equality_expression(rv) ::= relational_expression(expr).
+        { rv = expr; expr = NULL; }
+equality_expression(rv) ::= equality_expression(a) EQ_OP relational_expression(b).
+        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_EQUALS, a, b);
+          a = b = NULL; }
+equality_expression(rv) ::= equality_expression(a) NE_OP relational_expression(b).
+        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_NOT_EQUALS, a, b);
+          a = b = NULL; }
+
+and_expression(rv) ::= equality_expression(expr).
+        { rv = expr; expr = NULL; }
+and_expression(rv) ::= and_expression(a) '&' equality_expression(b).
+        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_BITWISE_AND, a, b);
+          a = b = NULL; }
+
+exclusive_or_expression(rv) ::= and_expression(expr).
+        { rv = expr; expr = NULL; }
+exclusive_or_expression(rv) ::= exclusive_or_expression(a) '^' and_expression(b).
+        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_BITWISE_XOR, a, b);
+          a = b = NULL; }
+
+inclusive_or_expression(rv) ::= exclusive_or_expression(expr).
+        { rv = expr; expr = NULL; }
+inclusive_or_expression(rv) ::= inclusive_or_expression(a) '|' exclusive_or_expression(b).
+        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_BITWISE_OR, a, b);
+          a = b = NULL; }
+
+logical_and_expression(rv) ::= inclusive_or_expression(expr).
+        { rv = expr; expr = NULL; }
+logical_and_expression(rv) ::= logical_and_expression(a) AND_OP inclusive_or_expression(b).
+        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_LOGICAL_AND, a, b);
+          a = b = NULL; }
+
+logical_or_expression(rv) ::= logical_and_expression(expr).
+        { rv = expr; expr = NULL; }
+logical_or_expression(rv) ::= logical_or_expression(a) OR_OP logical_and_expression(b).
+        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_LOGICAL_OR, a, b);
+          a = b = NULL; }
+
+conditional_expression(rv) ::= logical_or_expression(expr).
+        { rv = expr; expr = NULL; }
+conditional_expression(rv) ::= logical_or_expression(a) '?' expression(b) ':' conditional_expression(c).
+        { rv = dbcc_expr_new_ternary (a, b, c);
+          a = b = c = NULL; }
+
+assignment_expression(rv) ::= conditional_expression(expr).
+        { rv = expr; expr = NULL; }
+assignment_expression(rv) ::= unary_expression(a) assignment_operator(op) assignment_expression(b).
+	{ rv = dbcc_expr_new_inplace_binary (op, a, b); a = b = NULL; }
+
+assignment_operator(rv) ::= '='.
+        { rv = DBCC_INPLACE_BINARY_OPERATOR_ASSIGN; }
+assignment_operator(rv) ::= MUL_ASSIGN.
+        { rv = DBCC_INPLACE_BINARY_OPERATOR_MUL_ASSIGN; }
+assignment_operator(rv) ::= DIV_ASSIGN.
+        { rv = DBCC_INPLACE_BINARY_OPERATOR_DIV_ASSIGN; }
+assignment_operator(rv) ::= REM_ASSIGN.
+        { rv = DBCC_INPLACE_BINARY_OPERATOR_REM_ASSIGN; }
+assignment_operator(rv) ::= ADD_ASSIGN.
+        { rv = DBCC_INPLACE_BINARY_OPERATOR_ADD_ASSIGN; }
+assignment_operator(rv) ::= SUB_ASSIGN.
+        { rv = DBCC_INPLACE_BINARY_OPERATOR_SUB_ASSIGN; }
+assignment_operator(rv) ::= LEFT_SHIFT_ASSIGN.
+        { rv = DBCC_INPLACE_BINARY_OPERATOR_LEFT_SHIFT_ASSIGN; }
+assignment_operator(rv) ::= RIGHT_SHIFT_ASSIGN.
+        { rv = DBCC_INPLACE_BINARY_OPERATOR_RIGHT_SHIFT_ASSIGN; }
+assignment_operator(rv) ::= AND_ASSIGN.
+        { rv = DBCC_INPLACE_BINARY_OPERATOR_AND_ASSIGN; }
+assignment_operator(rv) ::= XOR_ASSIGN.
+        { rv = DBCC_INPLACE_BINARY_OPERATOR_XOR_ASSIGN; }
+assignment_operator(rv) ::= OR_ASSIGN.
+        { rv = DBCC_INPLACE_BINARY_OPERATOR_OR_ASSIGN; }
+
+expression(rv) ::= assignment_expression(expr).
+        { rv = expr; expr = NULL; }
+expression(rv) ::= expression(a) ',' assignment_expression(b).
+        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_COMMA, a, b);
+          a = b = NULL; }
+
+constant_expression(rv) ::= conditional_expression(a).
+	{ if (a->constant_value == NULL)
+            {
+              ...
+            }
+          rv = a;
+          a = NULL;
+        }
+
+declaration(rv) ::= declaration_specifiers(list) ';'.
+        { ... }
+
+	| declaration_specifiers init_declarator_list ';'
+	| static_assert_declaration
+	;
+
+opt_declaration_specifiers(rv) ::= declaration_specifiers(a).
+        { rv = a; a = NULL; }
+opt_declaration_specifiers(rv) ::= .
+        { rv = dbcc_declaration_specifiers_new (); }
+
+declaration_specifiers(rv) ::= storage_class_specifier(scs) opt_declaration_specifiers(a).
+        { rv = a; a = NULL;
+          rv->storage_class_specifiers |= scs; }
+declaration_specifiers(rv) ::= type_specifier(ts) opt_declaration_specifiers(a).
+        { rv = a; a = NULL;
+          dbcc_declaration_specifiers_append_type_specifier(rv, ts); 
+          ts = NULL; }
+declaration_specifiers(rv) ::= type_qualifier(tq) opt_declaration_specifiers(a).
+        { rv = a; a = NULL;
+          rv->type_qualifiers |= tq; }
+declaration_specifiers(rv) ::= alignment_specifier(s) opt_declaration_specifiers(a).
+        { rv = a; a = NULL;
+          dbcc_declaration_specifiers_append_alignment_specifier(s); s = NULL; }
+
+init_declarator_list
+	: init_declarator
+	| init_declarator_list ',' init_declarator
+	;
+
+init_declarator
+	: declarator '=' initializer
+	| declarator
+	;
+
+storage_class_specifier(rv) ::= TYPEDEF.
+        { rv = DBCC_STORAGE_CLASS_SPECIFIER_TYPEDEF; }
+storage_class_specifier(rv) ::= EXTERN.
+        { rv = DBCC_STORAGE_CLASS_SPECIFIER_EXTERN; }
+storage_class_specifier(rv) ::= STATIC.
+        { rv = DBCC_STORAGE_CLASS_SPECIFIER_STATIC; }
+storage_class_specifier(rv) ::= THREAD_LOCAL.
+        { rv = DBCC_STORAGE_CLASS_SPECIFIER_THREAD_LOCAL; }
+storage_class_specifier(rv) ::= AUTO.
+        { rv = DBCC_STORAGE_CLASS_SPECIFIER_AUTO; }
+storage_class_specifier(rv) ::= REGISTER.
+        { rv = DBCC_STORAGE_CLASS_SPECIFIER_REGISTER; }
+
+type_specifier(rv) ::= VOID;
+        { rv = DBCC_TYPE_SPECIFIER_INIT;
+          rv.flags |= DBCC_TYPE_SPECIFIER_FLAG_VOID; }
+type_specifier(rv) ::= CHAR;
+        { rv = DBCC_TYPE_SPECIFIER_INIT;
+          rv.flags |= DBCC_TYPE_SPECIFIER_FLAG_CHAR; }
+type_specifier(rv) ::= INT;
+        { rv = DBCC_TYPE_SPECIFIER_INIT;
+          rv.flags |= DBCC_TYPE_SPECIFIER_FLAG_INT; }
+type_specifier(rv) ::= LONG;
+        { rv = DBCC_TYPE_SPECIFIER_INIT;
+          rv.flags |= DBCC_TYPE_SPECIFIER_FLAG_LONG; }
+type_specifier(rv) ::= FLOAT;
+        { rv = DBCC_TYPE_SPECIFIER_INIT;
+          rv.flags |= DBCC_TYPE_SPECIFIER_FLAG_FLOAT; }
+type_specifier(rv) ::= DOUBLE;
+        { rv = DBCC_TYPE_SPECIFIER_INIT;
+          rv.flags |= DBCC_TYPE_SPECIFIER_FLAG_DOUBLE; }
+type_specifier(rv) ::= SIGNED;
+        { rv = DBCC_TYPE_SPECIFIER_INIT;
+          rv.flags |= DBCC_TYPE_SPECIFIER_FLAG_SIGNED; }
+type_specifier(rv) ::= UNSIGNED;
+        { rv = DBCC_TYPE_SPECIFIER_INIT;
+          rv.flags |= DBCC_TYPE_SPECIFIER_FLAG_UNSIGNED; }
+type_specifier(rv) ::= BOOL;
+        { rv = DBCC_TYPE_SPECIFIER_INIT;
+          rv.flags |= DBCC_TYPE_SPECIFIER_FLAG_BOOL; }
+type_specifier(rv) ::= COMPLEX;
+        { rv = DBCC_TYPE_SPECIFIER_INIT;
+          rv.flags |= DBCC_TYPE_SPECIFIER_FLAG_COMPLEX; }
+type_specifier(rv) ::= IMAGINARY;
+        { rv = DBCC_TYPE_SPECIFIER_INIT;
+          rv.flags |= DBCC_TYPE_SPECIFIER_FLAG_IMAGINARY; }
+type_specifier(rv) ::= ATOMIC '(' type_name(type) ')'
+        { rv = DBCC_TYPE_SPECIFIER_INIT;
+          rv.atomic_type = type; type = NULL; }
+type_specifier(rv) ::= struct_specifier(a).
+        { rv = a; a = NULL; }
+type_specifier(rv) ::= union_specifier(a).
+        { rv = a; a = NULL; }
+type_specifier(rv) ::= enum_specifier(a).
+        { rv = a; a = NULL; }
+type_specifier(rv) ::= TYPEDEF_NAME(t).
+	{ rv = dbcc_type_specifier_new_type (t->info.v_type); t->info.v_type = NULL; }
+
+struct_specifier ::= STRUCT '{' struct_declaration_list(list) '}'.
+        { rv = dbcc_type_specifier_new_struct (NULL, list); }
+struct_specifier ::= STRUCT IDENTIFIER(id) '{' struct_declaration_list(list) '}'.
+        { rv = dbcc_type_specifier_new_struct (id->str, list); }
+struct_specifier ::= STRUCT IDENTIFIER.
+        { rv = dbcc_type_specifier_new_struct_stub (id->str); }
+union_specifier  ::= UNION '{' struct_declaration_list(list) '}'.
+        { rv = dbcc_type_specifier_new_union (NULL, list); }
+union_specifier  ::= UNION IDENTIFIER(id) '{' struct_declaration_list(list) '}'.
+        { rv = dbcc_type_specifier_new_union (id->str, list); }
+union_specifier  ::= UNION IDENTIFIER.
+        { rv = dbcc_type_specifier_new_union_stub (id->str); }
+
+struct_declaration_list(rv) ::= struct_declaration(a).
+        { rv.first = rv.last = NULL;
+          dbcc_declaration_list_append(rv, a);
+          a = NULL; }
+struct_declaration_list(rv) ::= struct_declaration_list(in) struct_declaration(a).
+        { rv = in;
+          in.first = in.last = NULL;
+          dbcc_declaration_list_append(rv, a);
+          a = NULL; }
+
+struct_declaration(rv) ::= specifier_qualifier_list(in) ';'.   /* for anonymous struct/union within structs */
+        {
+          ... assert specifier_qualifier_list must be a struct or union (non-stub)
+          ...
+        }
+struct_declaration(rv) ::= specifier_qualifier_list struct_declarator_list ';'.
+        {
+          ...
+        }
+struct_declaration(rv) ::= specifier_qualifier_list struct_declarator_list ';'.
+        {
+          ...
+        }
+struct_declaration(rv) ::= static_assert_declaration(sadecl).
+	{
+          ...
+	}
+
+specifier_qualifier_list(rv) ::= type_specifier(ts) specifier_qualifier_list(a).
+        { rv = a; a = NULL;
+          if (!dbcc_type_specifiers_combine (ts, rv.type_specifier, &tmp))
+            {
+              ...
+            }
+          a.first = a.last = NULL;
+          ts.elements = NULL;
+          ts.n_elements = 0;
+          ts.id = NULL;
+        }
+
+specifier_qualifier_list(rv) ::= type_specifier(ts).
+	{ rv = dbcc_specifier_qualifier_list_new_from_type_specifier (ts);
+          ts.elements = NULL;
+          ts.n_elements = 0;
+          ts.id = NULL; }
+
+specifier_qualifier_list(rv) ::= type_qualifier(tq) specifier_qualifier_list(a).
+        { rv = a;
+          rv.type_qualifier |= tq;
+          a.first = a.last = NULL; }
+specifier_qualifier_list(rv) ::= type_qualifier(tq).
+	{ rv = dbcc_specifier_qualifier_list_new ();
+          rv.type_qualifier |= tq; }
+
+// a comma-separated list of variables with qualifiers,
+// in an expression like 'int a, *b'
+// the whole thing is a "declaration" and "a" and "b" are "declarators".
+struct_declarator_list(list) ::= struct_declarator(decl);
+        { list = dbcc_declarator_list_new ();
+          dbcc_declarator_list_append (list, decl);
+          decl = NULL; }
+struct_declarator_list(list) ::= struct_declarator_list(in) ',' struct_declarator(decl).
+        { list = in;
+          in.first = in.last = NULL;
+          dbcc_declarator_list_append (list, decl);
+          decl = NULL; }
+
+struct_declarator(sdecl) ::= ':' constant_expression(bitcount).
+        { DBCC_Declarator *tmp = dbcc_declarator_new ();
+          tmp->bitcount_expr = bitcount;  // verify constant???
+          sdecl = tmp;
+          bitcount = NULL; }
+struct_declarator(sdecl) ::= declarator(decl) ':' constant_expression(bitcount).
+        { decl->bitcount_expr = bitcount;  // verify constant???
+          sdecl = decl;
+          decl = NULL;
+          bitcount = NULL; }
+struct_declarator(sdecl) ::= declarator(decl).
+        { sdecl = decl;
+          decl = NULL; }
+
+enum_specifier(rv) ::= ENUM opt_identifier(id) '{' enumerator_list(list) opt_comma '}'.
+        { ... }
+
+enumerator_list(rv) ::= enumerator(e).
+        { e->next = NULL; rv.first = rv.last = e; e = NULL; }
+enumerator_list(rv) ::= enumerator_list(a) ',' enumerator(e).
+        { if (a.first == NULL)
+            a.first = e;
+          else
+            a.last->next = e;
+          a.last = e;
+          e.next = NULL; }
+
+// an enumeration value, with value either implicit (assigned automatically)
+// or explicit (derived from a constant expression).
+enumerator(rv) ::= enumeration_constant(c) '=' constant_expression(v).
+        { rv = dbcc_enum_value_new (c, v); c = NULL; v = NULL; }
+enumerator(rv) ::= enumeration_constant(c).
+        { rv = dbcc_enum_value_new (c, NULL); c = NULL; }
+
+atomic_type_specifier(rv) ::= ATOMIC '(' type_name(type) ')'
+	{ rv = dbcc_type_specifier_new_atomic(type);
+          type = NULL; }
+
+type_qualifier(rv) ::= CONST.
+        { rv = DBCC_TYPE_QUALIFIER_CONST; }
+type_qualifier(rv) ::= RESTRICT.
+        { rv = DBCC_TYPE_QUALIFIER_RESTRICT; }
+type_qualifier(rv) ::= VOLATILE.
+        { rv = DBCC_TYPE_QUALIFIER_VOLATILE; }
+type_qualifier(rv) ::= ATOMIC.
+        { rv = DBCC_TYPE_QUALIFIER_ATOMIC; }
+
+function_specifier(rv) ::= INLINE.
+        { rv = DBCC_FUNCTION_SPECIFIER_INLINE; }
+function_specifier(rv) ::= NORETURN.
+        { rv = DBCC_FUNCTION_SPECIFIER_NORETURN; }
+
+alignment_specifier(rv) ::= : ALIGNAS '(' type_name ')'.
+alignment_specifier(rv) ::= : ALIGNAS '(' constant_expression ')'.
+
+declarator(out) ::= pointer(ptr) direct_declarator(in).
+        { out = in; in = NULL;
+          dbcc_declarator_prepend_pointer_spec(out, ptr.n_ptr, ptr.ptr_type_qualifiers); }
+declarator(out) ::= direct_declarator(in).
+        { out = in; in = NULL; }
+
+direct_declarator(decl) ::= IDENTIFIER(id).
+        { decl = dbcc_declarator_new (id->v_symbol); id->info.v_symbol = NULL; }
+
+direct_declarator(decl) ::= '(' declarator(in) ')'.
+        { decl = in; in = NULL; }
+direct_declarator(decl) ::= direct_declarator(in) '[' opt_type_qualifier_list(tq) ']'.
+        { decl = in; dbcc_declarator_append_array (decl, tq, NULL); in = NULL; }
+
+direct_declarator(decl) ::= direct_declarator(in) '[' opt_static(os1) opt_type_qualifier_list(tq) opt_static(os2) assignment_expression(index_expr) ']'.
+        { if (os1 && os2)
+            {
+              ...     //error static must only appear once
+            }
+          if (os1 || os2)
+            {
+              ...     //index_expr must be constant!
+            }
+          decl = in;
+          dbcc_declarator_append_array (decl, tq, index_expr);
+          in = NULL;
+        }
+direct_declarator(decl) ::= direct_declarator(in) '[' opt_type_qualifier_list(tq) '*' ']'.
+        { decl = in;
+          dbcc_declarator_append_variable_length_array (decl, tq);
+          in = NULL; }
+direct_declarator(decl) ::= direct_declarator(in) '(' parameter_type_list(plist) ')'.
+        { decl = in;
+          in = NULL;
+          dbcc_declarator_append_function (decl, plist.first);
+          plist.first = plist.last = NULL;
+        }
+direct_declarator(decl) ::= direct_declarator(in) '(' ')'.
+        { decl = in;
+          in = NULL;
+          dbcc_declarator_append_function_no_args (decl);
+        }
+direct_declarator(decl) ::= direct_declarator(in) '(' identifier_list(idlist) ')'.
+        { decl = in;
+          in = NULL;
+          unsigned n_symbols = 0;
+          for (DBCC_P_IdentifierList *at = idlist.first; at; at = at->next)
+            n_symbols++;
+          unsigned i = 0;
+          symbols = malloc (sizeof (DBCC_Symbol *) * n_symbols);
+          for (DBCC_P_IdentifierList *at = idlist.first; at; at = at->next)
+            symbols[i++] = at->symbol;
+          dbcc_declarator_append_function_kr (decl, n_symbols, symbols);
+        }
+
+opt_static(rv) ::= .
+        { rv = false; }
+opt_static(rv) ::= STATIC
+        { rv = true; }
+
+pointer(rv) ::= '*' opt_type_qualifier_list(tq) pointer(a).
+        { rv.n_ptr = a.n_ptr + 1
+          rv.ptr_type_qualifiers = malloc (sizeof(DBCC_TypeQualifier) * rv.n_ptr);
+          rv.ptr_type_qualifiers[0] = tq;
+          memcpy (rv.ptr_type_qualifiers + 1, a.ptr_type_qualifiers, sizeof(DBCC_TypeQualifier) * a.n_ptr); }
+pointer(rv) ::= '*' opt_type_qualifier_list(tq).
+        { rv.n_ptr = 1;
+          rv.ptr_type_qualifiers = malloc (sizeof(DBCC_TypeQualifier));
+          rv.ptr_type_qualifiers[0] = tq;
+        }
+
+opt_type_qualifier_list(o) ::= .
+        { o = 0; }
+opt_type_qualifier_list(o) ::= type_qualifier_list(i).
+        { o = i; }
+
+type_qualifier_list(o) ::= type_qualifier(i).
+        { o = i; }
+type_qualifier_list(o) ::= type_qualifier_list(a) type_qualifier(i).
+        { o = a | i; }
+
+
+parameter_type_list(rv) ::= parameter_list(a) ',' ELLIPSIS.
+        { rv = a;
+          a = NULL;
+          rv->is_vararg = true; }
+parameter_type_list(rv) ::= parameter_list(a).
+        { rv = a;
+          a = NULL; }
+
+parameter_list(rv) ::= parameter_declaration(decl).
+        { rv.first = rv.last = decl;
+          decl->next = NULL;
+          decl = NULL; }
+parameter_list(rv) ::= parameter_list(a) ',' parameter_declaration(decl).
+        { if (a.first == NULL)
+            a.first = decl;
+          else
+            a.last->next = decl;
+          a.last = decl;
+          rv = a;
+          a.first = a.last = NULL;
+          decl = NULL; }
+
+parameter_declaration ::= declaration_specifiers declarator.
+        { ... }
+parameter_declaration ::= declaration_specifiers abstract_declarator.
+        { ... }
+parameter_declaration ::= declaration_specifiers.
+        { ... }
+
+identifier_list(rv) ::= IDENTIFIER(id).
+        { rv = { NULL, NULL };
+          dbcc_p_identifier_list_append (&rv, id->info.v_symbol); }
+identifier_list(rv) ::= identifier_list(a) ',' IDENTIFIER(id).
+        { rv = a; a.first = a.last = NULL;
+          dbcc_p_identifier_list_append (&rv, id->info.v_symbol); }
+
+type_name
+	: specifier_qualifier_list abstract_declarator
+	| specifier_qualifier_list
+	;
+
+abstract_declarator
+	: pointer direct_abstract_declarator
+	| pointer
+	| direct_abstract_declarator
+	;
+
+direct_abstract_declarator
+	: '(' abstract_declarator ')'
+	| '[' ']'
+	| '[' '*' ']'
+	| '[' STATIC type_qualifier_list assignment_expression ']'
+	| '[' STATIC assignment_expression ']'
+	| '[' type_qualifier_list STATIC assignment_expression ']'
+	| '[' type_qualifier_list assignment_expression ']'
+	| '[' type_qualifier_list ']'
+	| '[' assignment_expression ']'
+	| direct_abstract_declarator '[' ']'
+	| direct_abstract_declarator '[' '*' ']'
+	| direct_abstract_declarator '[' STATIC type_qualifier_list assignment_expression ']'
+	| direct_abstract_declarator '[' STATIC assignment_expression ']'
+	| direct_abstract_declarator '[' type_qualifier_list assignment_expression ']'
+	| direct_abstract_declarator '[' type_qualifier_list STATIC assignment_expression ']'
+	| direct_abstract_declarator '[' type_qualifier_list ']'
+	| direct_abstract_declarator '[' assignment_expression ']'
+	| '(' ')'
+	| '(' parameter_type_list ')'
+	| direct_abstract_declarator '(' ')'
+	| direct_abstract_declarator '(' parameter_type_list ')'
+	;
+
+initializer
+	: '{' initializer_list '}'
+	| '{' initializer_list ',' '}'
+	| assignment_expression
+	;
+
+initializer_list
+	: designation initializer
+	| initializer
+	| initializer_list ',' designation initializer
+	| initializer_list ',' initializer
+	;
+
+designation
+	: designator_list '='
+	;
+
+designator_list
+	: designator
+	| designator_list designator
+	;
+
+designator
+	: '[' constant_expression ']'
+	| '.' IDENTIFIER
+	;
+
+static_assert_declaration
+	: STATIC_ASSERT '(' constant_expression ',' STRING_LITERAL ')' ';'
+	;
+
+statement(rv) ::= labeled_statement(stmt).
+        { rv = stmt; stmt = NULL; }
+statement(rv) ::= compound_statement(stmt).
+        { rv = stmt; stmt = NULL; }
+statement(rv) ::= expression_statement(stmt).
+        { rv = stmt; stmt = NULL; }
+statement(rv) ::= selection_statement(stmt).
+        { rv = stmt; stmt = NULL; }
+statement(rv) ::= iteration_statement(stmt).
+        { rv = stmt; stmt = NULL; }
+statement(rv) ::= jump_statement(stmt).
+        { rv = stmt; stmt = NULL; }
+
+labeled_statement(rv) ::= IDENTIFIER(id) ':' statement(stmt).
+        { rv = dbcc_statement_new_p_labelled (id->info.v_symbol, stmt);
+          stmt = NULL; }
+labeled_statement(rv) ::= CASE constant_expression(value) ':' statement(stmt).
+        { rv = dbcc_statement_new_p_case (value, stmt);
+          value = NULL;
+          stmt = NULL; }
+labeled_statement(rv) ::= DEFAULT ':' statement(stmt).
+        { rv = dbcc_statement_new_default (stmt);
+          stmt = NULL; }
+
+compound_statement ::= '{' '}'.
+        { rv = dbcc_statement_new_compound (0, NULL); }
+compound_statement ::= '{'  block_item_list(stmtlist) '}'.
+        // XXX: use natural list instead???
+        { size_t n_child = 0;
+          for (DBCC_Statement *at = stmtlist->first_child; at != NULL; at = at->next)
+            n_child++;
+          DBCC_Statement **children = malloc (sizeof (DBCC_Statement *) * n_child);
+          size_t i = 0;
+          for (DBCC_Statement *at = stmtlist->first_child; at != NULL; at = at->next)
+            children[i++] = at;
+          rv = dbcc_statement_new_compound (n_child, children);
+          stmtlist.first = stmtlist.last = NULL; }
+
+block_item_list(rv) ::= block_item(bi).
+        { rv.first = rv.last = bi;
+          bi->next = NULL; }
+block_item_list(rv) ::= block_item_list(in) block_item(bi).
+        { rv.last->next = bi;
+          rv.last = bi;
+          bi->next = NULL; }
+
+block_item(rv) ::= declaration(a).
+        { rv = a; a = NULL; }
+block_item(rv) ::= statement(a).
+        { rv = a; a = NULL; }
+
+expression_statement ::= ';'.
+        { rv = dbcc_statement_new_empty (); }
+expression_statement ::= expression(expr) ';'.
+        { rv = dbcc_statement_new_expr (expr);
+          expr = NULL; }
+
+selection_statement(rv) ::= IF '(' expression(cond) ')' statement(body) ELSE statement(else_body).
+        { ... }
+selection_statement(rv) ::= IF '(' expression(cond) ')' statement(body).
+        { ... }
+selection_statement(rv) ::= SWITCH '(' expression(expr) ')' statement(body).
+        { ... }
+
+iteration_statement(rv) ::= WHILE '(' expression(expr) ')' statement(stmt).
+        { rv = dbcc_statement_new_while (expr, stmt);
+          expr = NULL;
+          stmt = NULL; }
+
+iteration_statement(rv) ::= DO statement(stmt) WHILE '(' expression(expr) ')' ';'.
+        { rv = dbcc_statement_new_do_while (stmt, expr);
+          expr = NULL;
+          stmt = NULL; }
+iteration_statement(rv) ::= FOR '(' expression_statement(init) expression_statement(cond) opt_expression(advance) ')' statement(body).
+        { rv = dbcc_statement_new_for (NULL, init, cond, advance, body); }
+          init = NULL;
+          cond = NULL;
+          advance = NULL;
+          body = NULL; }
+iteration_statement(rv) ::= FOR '(' declaration(decl) expression_statement(cond) opt_expression(advance) ')' statement(body).
+        { rv = dbcc_statement_new_for (decl, NULL, cond, advance, body); }
+          init = decl;
+          cond = NULL;
+          advance = NULL;
+          body = NULL; }
+
+jump_statement(rv) ::= GOTO IDENTIFIER(id) ';'.
+        { rv = dbcc_statement_new_jump (id->v_symbol); }
+jump_statement(rv) ::= CONTINUE ';'.
+        { rv = dbcc_statement_new_continue (); }
+jump_statement(rv) ::= BREAK ';'.
+        { rv = dbcc_statement_new_break (); }
+jump_statement(rv) ::= RETURN ';'.
+        { rv = dbcc_statement_new_return (NULL); }
+jump_statement(rv) ::= RETURN expression(expr) ';'.
+        { rv = dbcc_statement_new_return (expr); expr = NULL; }
+
+translation_unit(rv) ::= external_declaration(a).
+        { rv = dbcc_translation_unit_new ();
+          dbcc_translation_unit_append_declaration(rv, a);
+          a = NULL; }
+translation_unit(rv) ::= translation_unit(tu) external_declaration(a).
+        { rv = tu; tu = NULL;
+          dbcc_translation_unit_append_declaration(rv, a);
+          a = NULL; }
+
+external_declaration(rv) ::= function_definition(f).
+        { rv = f; f = NULL; }
+external_declaration(rv) ::= definition(d).
+        { rv = d; d = NULL; }
+
+// an DBCC_Declaration, even though it doesn't fit the mould too well
+function_definition(fdef) ::= declaration_specifiers(decl_specs) declarator(decl) opt_declaration_list(kr) compound_statement(body).
+        { ... }
+
+/// only used for k+r function definitions
+declaration_list(x) ::= declaration(d).
+        { d->next = NULL; x.first = x.last = d; }
+declaration_list(rv) ::= declaration_list(in) declaration(d).
+        { x.last->next = d; x.last = d; d->next = NULL; }
+
+opt_declaration_list(rv) ::= .
+        { rv.first = rv.last = NULL; }
+opt_declaration_list(rv) ::= declaration_list(a).
+        { rv = a; a.first = a.last = NULL; }
