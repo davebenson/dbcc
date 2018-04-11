@@ -56,68 +56,32 @@ typedef enum
   DBCC_TYPE_QUALIFIER_ATOMIC = (1<<3),
 } DBCC_TypeQualifier;
 
-typedef enum
-{
-  DBCC_TYPE_SPECIFIER_FLAG_VOID      = (1<<0),
-  DBCC_TYPE_SPECIFIER_FLAG_CHAR      = (1<<1),
-  DBCC_TYPE_SPECIFIER_FLAG_INT       = (1<<2),
-  DBCC_TYPE_SPECIFIER_FLAG_SHORT     = (1<<3),
-  DBCC_TYPE_SPECIFIER_FLAG_LONG      = (1<<4),
-  DBCC_TYPE_SPECIFIER_FLAG_LONG_LONG = (1<<5),
-  DBCC_TYPE_SPECIFIER_FLAG_UNSIGNED  = (1<<6),
-  DBCC_TYPE_SPECIFIER_FLAG_SIGNED    = (1<<7),
-  DBCC_TYPE_SPECIFIER_FLAG_FLOAT     = (1<<8),
-  DBCC_TYPE_SPECIFIER_FLAG_DOUBLE    = (1<<9),
-  DBCC_TYPE_SPECIFIER_FLAG_BOOL      = (1<<10),
-  DBCC_TYPE_SPECIFIER_FLAG_ATOMIC    = (1<<11),
-  DBCC_TYPE_SPECIFIER_FLAG_COMPLEX   = (1<<12),
-  DBCC_TYPE_SPECIFIER_FLAG_IMAGINARY = (1<<13),
-  DBCC_TYPE_SPECIFIER_FLAG_TYPEDEF   = (1<<14),
-  DBCC_TYPE_SPECIFIER_FLAG_STRUCT    = (1<<15),
-  DBCC_TYPE_SPECIFIER_FLAG_UNION     = (1<<16),
-  DBCC_TYPE_SPECIFIER_FLAG_ENUM      = (1<<17)
-} DBCC_TypeSpecifierFlags;
-
-bool dbcc_type_specifier_flags_combine (DBCC_TypeSpecifierFlags in1,
-                                        DBCC_TypeSpecifierFlags in2,
-                                        DBCC_TypeSpecifierFlags *out);
-
-// a single, but complicated, declaration.
-//
-//    const int a, b[10], (*c)(int x), *d[3][3];
-struct _DBCC_Declaration
-{
-  DBCC_TypeSpecifier specifier;
-  DBCC_TypeQualifier qualifier;
-  unsigned n_declarator;
-  DBCC_Declarator **declarator;
-};
-
-typedef struct
-{
-  DBCC_DeclaratorType type;
-  DBCC_Symbol *name;            // for non-abstract declarator
-  unsigned n_ptr;
-  DBCC_TypeQualifier *nonzero_ptr_tqs;
-} DBCC_Declarator;
 
 typedef struct
 {
   int value;
   DBCC_Symbol name;
 } DBCC_EnumValue;
-typedef struct
-{
-  DBCC_TypeSpecifierFlags flags;
-  DBCC_Symbol *id;              // for named structs, unions, enums
-  bool is_stub;                 // for forward-declared structs+unions+enums
-  unsigned n_elements;          // for structs,unions,enums
-  void *elements;
-} DBCC_TypeSpecifier;
 
 typedef struct DBCC_String DBCC_String;
 struct DBCC_String
 {
   size_t length;
   char *str;
+};
+
+// The C Grammar we use defines a Declaration as a tricky beast with a list of "Declarators",
+// which are intended to generally handle reasonable cases like:
+//       int x,y,z;
+// and unreasonable cases like:
+//       int x[10] = { [5] = 42 }, *y, (*z)(void*) = free;
+//
+// We will "normalize" the above so that each "declarator" becomes its own "declaration".
+// So it'd be equivalent to the longer form for the above "unreasonable" case:
+//       int x[10] = { [5] = 42 };
+//       int *y;
+//       int (*z)(void*) = free;
+struct DBCC_Declaration
+{
+...
 };
