@@ -111,7 +111,7 @@ DBCC_INLINE void dbcc_string_clear (DBCC_String *clear)
 #include "dbcc-type.h"
 #include "dbcc-expr.h"
 #include "dbcc-statement.h"
-#include "dbcc-global-namespace.h"
+#include "dbcc-namespace.h"
 
 // The C Grammar we use defines a Declaration as a tricky beast with a list of "Declarators",
 // which are intended to generally handle reasonable cases like:

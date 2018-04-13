@@ -69,6 +69,18 @@ ABOUT THE DIFFERENCES BETWEEN THE PARSING TYPES AND THE FINAL TYPES:
 
   * The P_* Types should never leak out of dbcc-lemon-p.lemon.
 
+  * The most important change is that P_Declaration transforms
+    into a list of DBCC_Declaration's, one for each declarator.
+    This cleans up a lot of things.  The transformation expressed
+    in C looks like this: start with:
+       int foo = 42, *xyz = NULL, bar(int xxx);
+    it becomes:
+       int foo = 42;
+       int *xyz = NULL;
+       typedef int (*TMP)(int xxx);
+       TMP bar;
+    XXXX: where does the TMP deref/ref happen ???
+
  */
 
 %include{
@@ -636,11 +648,16 @@ p_type_specifiers_combine (P_Context *context,
 }
 
 static void
-p_type_specifiers_init_struct (P_TypeSpecifiers *to_init,
-                               DBCC_Symbol      *symbol,
+p_type_specifiers_init_struct (P_TypeSpecifiers  *to_init,
+                               DBCC_Symbol       *opt_symbol,
                                P_DeclarationList *declaration_list)
 {
-  ...
+  P_TypeSpecifiers rv = P_TYPE_SPECIFIERS_INIT;
+  rv.symbol = opt_symbol;
+  if (declaration_list != NULL)
+    {
+      ... to_init->... = ...
+    }
 }
 
 static void p_declaration_list_clear (P_DeclarationList *list);
