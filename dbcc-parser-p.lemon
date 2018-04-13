@@ -61,199 +61,99 @@ ABOUT THIS LEMON GRAMMAR:
   * During parsing, we use a lot of linked lists,
     but we switch to arrays for the exported types.
 
+ABOUT THE DIFFERENCES BETWEEN THE PARSING TYPES AND THE FINAL TYPES:
+
+  * For various reasons, we use lists in the parsing structures,
+    but we use arrays in the final code representations,
+    which are prefixed with DBCC_ like DBCC_Expr, DBCC_Statement*, etc.
+
+  * The P_* Types should never leak out of dbcc-lemon-p.lemon.
+
  */
 
 %include{
+#include <stdlib.h>
+#include <string.h>
+#include <assert.h>
+#include "dbcc.h"
+#include "dbcc-expr.h"
+
+typedef struct P_Token P_Token;
+struct P_Token
+{
+  DBCC_CodePosition *code_position;
+
+  // this is really an enum - whose values are given by 'lemon',
+  // so we don't want to export them.
+  int token_type;
+
+  // only used for the following token types:
+  //     IDENTIFIER
+  //     TYPEDEF_NAME
+  DBCC_Symbol *symbol;
+
+  // only used for the following token types:
+  //     STRING_LITERAL
+  DBCC_String string;
+
+  // only used for the following token types:
+  //     TYPEDEF_NAME
+  DBCC_Type *type;
+};
+
 typedef struct P_DeclaratorList P_DeclaratorList;
 typedef struct P_DeclarationList P_DeclarationList;
+typedef struct P_ParameterList P_ParameterList;
+typedef struct P_Declarator P_Declarator;
+typedef struct P_Declaration P_Declaration;
 typedef struct P_DesignatorList P_DesignatorList;
 typedef struct P_Designator P_Designator;
 
+typedef struct P_AlignmentSpecifier P_AlignmentSpecifier;
 typedef struct P_Initializer P_Initializer;
 typedef struct P_InitializerList P_InitializerList;
 
 typedef struct P_GenericAssociationList P_GenericAssociationList;
 typedef struct P_GenericAssociation P_GenericAssociation;
 
-typedef enum
-{
-  P_INITIALIZER_TYPE_SCALAR,
-  P_INITIALIZER_TYPE_OBJECT,
-  P_INITIALIZER_TYPE_ARRAY,
-} P_InitializerType;
-
-struct P_InitializerList
-{
-  P_Initializer *first;
-  P_Initializer *last;
-};
-
-struct P_Initializer
-{
-  P_InitializerType initializer_type;
-  P_Initializer *prev, *next;
-  union {
-    DBCC_Expr *v_scalar;
-    P_InitializerList v_children;               // for objects and arrays
-  };
-};
-
-struct P_GenericAssociationList
-{
-  P_GenericAssociation *first, *last;
-};
-struct P_GenericAssociation
-{
-  P_GenericAssociation *prev, *next;
-  DBCC_Type *type;
-  DBCC_Expr *expr;
-};
-
-typedef enum
-{
-  P_TYPE_SPECIFIER_INDEX_VOID      = 0,
-  P_TYPE_SPECIFIER_INDEX_CHAR      = 1,
-  P_TYPE_SPECIFIER_INDEX_INT       = 2,
-  P_TYPE_SPECIFIER_INDEX_SHORT     = 3,
-  P_TYPE_SPECIFIER_INDEX_LONG      = 4,
-  P_TYPE_SPECIFIER_INDEX_LONG_LONG = 5,
-  P_TYPE_SPECIFIER_INDEX_UNSIGNED  = 6,
-  P_TYPE_SPECIFIER_INDEX_SIGNED    = 7,
-  P_TYPE_SPECIFIER_INDEX_FLOAT     = 8,
-  P_TYPE_SPECIFIER_INDEX_DOUBLE    = 9,
-  P_TYPE_SPECIFIER_INDEX_BOOL      = 10,
-  P_TYPE_SPECIFIER_INDEX_ATOMIC    = 11,
-  P_TYPE_SPECIFIER_INDEX_COMPLEX   = 12,
-  P_TYPE_SPECIFIER_INDEX_IMAGINARY = 13,
-  P_TYPE_SPECIFIER_INDEX_TYPEDEF   = 14,
-  P_TYPE_SPECIFIER_INDEX_STRUCT    = 15,
-  P_TYPE_SPECIFIER_INDEX_UNION     = 16,
-  P_TYPE_SPECIFIER_INDEX_ENUM      = 17
-  P_TYPE_SPECIFIER_INDEX_STATIC    = 18
-} PTypeSpecifierFlags;
-#define N_TYPE_SPECIFIER_KEYWORDS     19
-
 typedef struct
 {
-  uint8_t counts[N_TYPE_SPECIFIER_KEYWORDS];
-  DBCC_Symbol *id;              // for named structs, unions, enums
-  bool is_stub;                 // for forward-declared structs+unions+enums
-  unsigned n_elements;          // for structs,unions,enums
-  void *elements;
-} P_TypeSpecifier;
-#define P_TYPE_SPECIFIER_INIT \
-        {{0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},NULL,false,0,NULL}
+  DBCC_Error *error;
+  DBCC_Namespace *globals;
+} P_Context;
 
 static bool
-p_type_specifiers_combine (P_TypeSpecifier *in_out,
-                           P_TypeSpecifier *modifier)
+p_context_lookup (P_Context *context,
+                  DBCC_Symbol *symbol,
+                  DBCC_CodePosition *cp,
+                  DBCC_NamespaceEntry *entry)
 {
-  for (unsigned i = 0; i < N_TYPE_SPECIFIER_KEYWORDS; i++)
+  if (!dbcc_namespace_lookup (context->globals, symbol, entry))
     {
-      uint8_t sum = in_out->counts[i] + modifier->counts[i];
-      if (sum < in_out->counts[i])
-        {
-          *error = DBCC_ERROR_TOO_MANY_TYPE_SPECIFIERS;
-          return false;
-        }
-      in_out->counts[i] = sum;
+      context->error = dbcc_error_new (DBCC_ERROR_NOT_FOUND,
+                                       "symbol '%s' not found",
+                                       dbcc_symbol_get_string(symbol));
+      if (cp != NULL)
+        dbcc_error_add_code_position (context->error, cp);
+      return false;
     }
+  return true;
 }
-struct P_DeclarationList
+
+static P_Context *
+p_context_new (DBCC_Namespace *ns)
 {
-  P_Declaration *first_declaration;
-  P_Declaration *last_declaration;
+  P_Context *rv = malloc (sizeof (P_Context));
+  rv->error = NULL;
+  rv->globals = ns;
+  return rv;
+}
+
+struct P_DesignatorList
+{
+  P_Designator *first, *last;
 };
-struct P_DeclaratorList
-{
-  P_Declarator *first_declarator;
-  P_Declarator *last_declarator;
-};
-typedef struct P_Declaration
-{
-  DBCC_TypeQualifier qualifiers;
-  DBCC_TypeSpecifier specifiers;
-  P_DeclaratorList declarators;
-  P_Declaration *prev, *next;
-};
-
-typedef enum
-{
-  P_DECLARATOR_TYPE_NAME,
-  P_DECLARATOR_TYPE_POINTER,
-  P_DECLARATOR_TYPE_ARRAY,
-  P_DECLARATOR_TYPE_VARLEN_ARRAY,
-} P_DeclaratorType;
-
-typedef struct P_Declarator
-{
-  P_DeclaratorType declarator_type;
-  P_Declarator *prev, *next;            // only for toplevel declarator
-  union {
-    DBCC_Symbol *v_name;
-    struct {
-      DBCC_TypeQualifier qualifiers;
-      P_Declarator *child;
-    } v_pointer;
-    struct {
-      P_Declarator *child;
-      DBCC_Expr *size;
-    } v_array;
-    struct {
-      P_Declarator *child;
-    } v_varlen_array;
-  };
-  P_Initializer *initializer;
-};
-static P_Declarator *
-p_declarator_new_pointer (DBCC_TypeQualifier qualifiers,
-                          P_Declarator *child)
-{
-...
-}
-
-static P_Declarator *
-p_declarator_new_array   (DBCC_TypeQualifier qualifiers,
-                          DBCC_Expr    *size,
-                          P_Declarator *child)
-{
-  ...
-}
-
-static P_Declarator *
-p_declarator_new_name    (DBCC_Symbol  *symbol)
-{
-  ...
-}
-
-
-static void
-p_declarator_destroy     (P_Declarator *d);
-{
-  ...
-}
-
-
-static void
-p_declaration_append_declarator (P_Declaration *parent,
-                                 P_Declarator  *child)
-{
-  ...
-}
-
-typedef struct P_ExprList P_ExprList;
-typedef struct P_ExprNode P_ExprNode;
-struct P_ExprList
-{
-  P_ExprNode *first, *last;
-};
-struct P_ExprNode
-{
-  DBCC_Expr *expr;
-  P_ExprNode *prev, *next;
-}
-
-typedef struct P_AlignmentSpecifier P_AlignmentSpecifier;
+  
 typedef enum
 {
   P_ALIGNMENT_SPECIFIER_BY_TYPE,
@@ -269,29 +169,877 @@ struct P_AlignmentSpecifier
 };
 
 
+typedef enum
+{
+  P_INITIALIZER_TYPE_SCALAR,
+  P_INITIALIZER_TYPE_BRACED
+} P_InitializerType;
+
+struct P_InitializerList
+{
+  P_Initializer *first;
+  P_Initializer *last;
+};
+
+struct P_Initializer
+{
+  P_DesignatorList designators;
+  P_InitializerType initializer_type;
+  P_Initializer *prev, *next;
+  union {
+    DBCC_Expr *v_scalar;
+    P_InitializerList v_children;               // for objects and arrays
+  };
+};
+static void p_initializer_list_clear(P_InitializerList *list);
+static void
+p_initializer_destroy (P_Initializer *p)
+{
+  switch (p->initializer_type)
+    {
+    case P_INITIALIZER_TYPE_SCALAR:
+      dbcc_expr_destroy (p->v_scalar);
+      break;
+    case P_INITIALIZER_TYPE_BRACED:
+      p_initializer_list_clear (&p->v_children);
+      break;
+    }
+  free (p);
+}
+static void p_initializer_list_clear(P_InitializerList *list)
+{
+  while (list->first != NULL)
+    {
+      P_Initializer *kill = list->first;
+      list->first = kill->next;
+      p_initializer_destroy (kill);
+    }
+  list->last = NULL;
+}
+
+typedef struct P_Enumerator P_Enumerator;
+typedef struct P_EnumeratorList P_EnumeratorList;
+struct P_EnumeratorList
+{
+  P_Enumerator *first, *last;
+};
+
+struct P_Enumerator
+{
+  P_Enumerator *next;
+  DBCC_Symbol *name;
+  DBCC_Expr *value;             // optional
+};
+static void
+p_enumerator_destroy (P_Enumerator *e)
+{
+  if (e->value != NULL)
+    dbcc_expr_destroy(e->value);
+  free(e);
+}
+static void
+p_enumerator_list_clear (P_EnumeratorList *list)
+{
+  while (list->first != NULL)
+    {
+      P_Enumerator *kill = list->first;
+      list->first = kill->next;
+      p_enumerator_destroy (kill);
+    }
+  list->last = NULL;
+}
+
+
+typedef struct P_IdentifierList P_IdentifierList;
+typedef struct P_IdentifierNode P_IdentifierNode;
+struct P_IdentifierList
+{
+  P_IdentifierNode *first, *last;
+};
+struct P_IdentifierNode
+{
+  DBCC_Symbol *identifier;
+  P_IdentifierNode *prev, *next;
+};
+static void p_identifier_node_destroy(P_IdentifierNode *node) { free(node); }
+static void
+p_identifier_list_clear (P_IdentifierList *list)
+{
+  while (list->first != NULL)
+    {
+      P_IdentifierNode *kill = list->first;
+      list->first = kill->next;
+      p_identifier_node_destroy (kill);
+    }
+  list->last = NULL;
+}
+
+
+struct P_GenericAssociationList
+{
+  P_GenericAssociation *first, *last;
+};
+struct P_GenericAssociation
+{
+  P_GenericAssociation *next;
+  DBCC_Type *type;
+  DBCC_Expr *expr;
+};
+static P_GenericAssociation *
+p_generic_association_new (DBCC_Type *type, DBCC_Expr *expr)
+{
+  P_GenericAssociation *rv = malloc (sizeof (P_GenericAssociation));
+  rv->next = NULL;
+  rv->type = type;
+  rv->expr = expr;
+  return rv;
+}
+static void p_generic_association_destroy (P_GenericAssociation *ga)
+{
+  dbcc_type_unref (ga->type);
+  dbcc_expr_destroy (ga->expr);
+  free (ga);
+}
+static void p_generic_association_list_clear (P_GenericAssociationList *list)
+{
+  while (list->first != NULL)
+    {
+      P_GenericAssociation *kill = list->first;
+      list->first = kill->next;
+      p_generic_association_destroy (kill);
+    }
+  list->last = NULL;
+}
+
+struct P_DeclarationList
+{
+  P_Declaration *first_declaration;
+  P_Declaration *last_declaration;
+};
+struct P_DeclaratorList
+{
+  P_Declarator *first_declarator;
+  P_Declarator *last_declarator;
+};
+typedef enum
+{
+  P_DECLARATION_TYPE_DECLARATION,
+  P_DECLARATION_TYPE_STATIC_ASSERT,
+} P_DeclarationType;
+
+
+typedef enum
+{
+  P_DECLARATOR_TYPE_NAME,
+  P_DECLARATOR_TYPE_POINTER,
+  P_DECLARATOR_TYPE_ARRAY,
+  P_DECLARATOR_TYPE_VARLEN_ARRAY,
+} P_DeclaratorType;
+
+struct P_Declarator
+{
+  P_DeclaratorType declarator_type;
+  P_Declarator *prev, *next;            // only for toplevel declarator
+  union {
+    DBCC_Symbol *v_name;
+    struct {
+      DBCC_TypeQualifier qualifiers;
+      P_Declarator *target;
+    } v_pointer;
+    struct {
+      DBCC_TypeQualifier qualifiers;
+      P_Declarator *child;
+      DBCC_Expr *size;
+    } v_array;
+    struct {
+      P_Declarator *child;
+    } v_varlen_array;
+  };
+  P_Initializer *initializer;
+};
+typedef enum
+{
+  P_TYPE_SPECIFIERS_INDEX_VOID      = 0,
+  P_TYPE_SPECIFIERS_INDEX_CHAR      = 1,
+  P_TYPE_SPECIFIERS_INDEX_INT       = 2,
+  P_TYPE_SPECIFIERS_INDEX_SHORT     = 3,
+  P_TYPE_SPECIFIERS_INDEX_LONG      = 4,
+  P_TYPE_SPECIFIERS_INDEX_UNSIGNED  = 5,
+  P_TYPE_SPECIFIERS_INDEX_SIGNED    = 6,
+  P_TYPE_SPECIFIERS_INDEX_FLOAT     = 7,
+  P_TYPE_SPECIFIERS_INDEX_DOUBLE    = 8,
+  P_TYPE_SPECIFIERS_INDEX_BOOL      = 9,
+  P_TYPE_SPECIFIERS_INDEX_ATOMIC    = 10,
+  P_TYPE_SPECIFIERS_INDEX_COMPLEX   = 11,
+  P_TYPE_SPECIFIERS_INDEX_IMAGINARY = 12,
+  P_TYPE_SPECIFIERS_INDEX_TYPEDEF   = 13,
+  P_TYPE_SPECIFIERS_INDEX_STRUCT    = 14,
+  P_TYPE_SPECIFIERS_INDEX_UNION     = 15,
+  P_TYPE_SPECIFIERS_INDEX_ENUM      = 16
+} P_TypeSpecifiersIndex;
+#define N_TYPE_SPECIFIER_KEYWORDS     17
+#define P_TYPE_SPECIFIER_KEYWORD_FOREACH(macro) \
+  macro(VOID)       \
+  macro(CHAR)       \
+  macro(INT)        \
+  macro(SHORT)      \
+  macro(LONG)       \
+  macro(UNSIGNED)   \
+  macro(SIGNED)     \
+  macro(FLOAT)      \
+  macro(DOUBLE)     \
+  macro(BOOL)       \
+  macro(ATOMIC)     \
+  macro(COMPLEX)    \
+  macro(IMAGINARY)  \
+  macro(TYPEDEF)    \
+  macro(STRUCT)     \
+  macro(UNION)      \
+  macro(ENUM)
+
+static uint8_t max_instances_of_counts[N_TYPE_SPECIFIER_KEYWORDS] =
+{
+  1,
+  1,
+  1,
+  1,
+  2,            // long long is allowed, the only allowed repeated keyword
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+  1,
+};
+#define CONFLICTS_WITH(type1, braced_list) \
+static P_TypeSpecifiersIndex conflicts_with_##type1[] = braced_list;
+#define TYPE_SPECIFIERS_LIST(...) { __VA_ARGS__ }
+
+CONFLICTS_WITH(VOID, TYPE_SPECIFIERS_LIST(
+  P_TYPE_SPECIFIERS_INDEX_CHAR,
+  P_TYPE_SPECIFIERS_INDEX_INT,
+  P_TYPE_SPECIFIERS_INDEX_SHORT,
+  P_TYPE_SPECIFIERS_INDEX_LONG,
+  P_TYPE_SPECIFIERS_INDEX_UNSIGNED,
+  P_TYPE_SPECIFIERS_INDEX_SIGNED,
+  P_TYPE_SPECIFIERS_INDEX_FLOAT,
+  P_TYPE_SPECIFIERS_INDEX_DOUBLE,
+  P_TYPE_SPECIFIERS_INDEX_BOOL,
+  P_TYPE_SPECIFIERS_INDEX_COMPLEX,
+  P_TYPE_SPECIFIERS_INDEX_IMAGINARY,
+  P_TYPE_SPECIFIERS_INDEX_TYPEDEF,
+  P_TYPE_SPECIFIERS_INDEX_STRUCT,
+  P_TYPE_SPECIFIERS_INDEX_UNION,
+  P_TYPE_SPECIFIERS_INDEX_ENUM
+  ))
+CONFLICTS_WITH(CHAR, TYPE_SPECIFIERS_LIST(
+  P_TYPE_SPECIFIERS_INDEX_INT,
+  P_TYPE_SPECIFIERS_INDEX_SHORT,
+  P_TYPE_SPECIFIERS_INDEX_LONG,
+  P_TYPE_SPECIFIERS_INDEX_FLOAT,
+  P_TYPE_SPECIFIERS_INDEX_DOUBLE,
+  P_TYPE_SPECIFIERS_INDEX_BOOL,
+  P_TYPE_SPECIFIERS_INDEX_TYPEDEF,
+  P_TYPE_SPECIFIERS_INDEX_STRUCT,
+  P_TYPE_SPECIFIERS_INDEX_UNION,
+  P_TYPE_SPECIFIERS_INDEX_ENUM
+))
+CONFLICTS_WITH(INT, TYPE_SPECIFIERS_LIST(
+  P_TYPE_SPECIFIERS_INDEX_FLOAT,
+  P_TYPE_SPECIFIERS_INDEX_DOUBLE,
+  P_TYPE_SPECIFIERS_INDEX_BOOL,
+  P_TYPE_SPECIFIERS_INDEX_TYPEDEF,
+  P_TYPE_SPECIFIERS_INDEX_STRUCT,
+  P_TYPE_SPECIFIERS_INDEX_UNION,
+  P_TYPE_SPECIFIERS_INDEX_ENUM
+))
+CONFLICTS_WITH(SHORT, TYPE_SPECIFIERS_LIST(
+  P_TYPE_SPECIFIERS_INDEX_LONG,
+  P_TYPE_SPECIFIERS_INDEX_FLOAT,
+  P_TYPE_SPECIFIERS_INDEX_DOUBLE,
+  P_TYPE_SPECIFIERS_INDEX_BOOL,
+  P_TYPE_SPECIFIERS_INDEX_TYPEDEF,
+  P_TYPE_SPECIFIERS_INDEX_STRUCT,
+  P_TYPE_SPECIFIERS_INDEX_UNION,
+  P_TYPE_SPECIFIERS_INDEX_ENUM
+))
+CONFLICTS_WITH(LONG, TYPE_SPECIFIERS_LIST(
+  P_TYPE_SPECIFIERS_INDEX_FLOAT,
+  P_TYPE_SPECIFIERS_INDEX_BOOL,
+  P_TYPE_SPECIFIERS_INDEX_TYPEDEF,
+  P_TYPE_SPECIFIERS_INDEX_STRUCT,
+  P_TYPE_SPECIFIERS_INDEX_UNION,
+  P_TYPE_SPECIFIERS_INDEX_ENUM
+))
+CONFLICTS_WITH(FLOAT, TYPE_SPECIFIERS_LIST(
+  P_TYPE_SPECIFIERS_INDEX_SIGNED,
+  P_TYPE_SPECIFIERS_INDEX_UNSIGNED,
+  P_TYPE_SPECIFIERS_INDEX_DOUBLE,
+  P_TYPE_SPECIFIERS_INDEX_BOOL,
+  P_TYPE_SPECIFIERS_INDEX_TYPEDEF,
+  P_TYPE_SPECIFIERS_INDEX_STRUCT,
+  P_TYPE_SPECIFIERS_INDEX_UNION,
+  P_TYPE_SPECIFIERS_INDEX_ENUM
+))
+CONFLICTS_WITH(DOUBLE, TYPE_SPECIFIERS_LIST(
+  P_TYPE_SPECIFIERS_INDEX_SIGNED,
+  P_TYPE_SPECIFIERS_INDEX_UNSIGNED,
+  P_TYPE_SPECIFIERS_INDEX_BOOL,
+  P_TYPE_SPECIFIERS_INDEX_TYPEDEF,
+  P_TYPE_SPECIFIERS_INDEX_STRUCT,
+  P_TYPE_SPECIFIERS_INDEX_UNION,
+  P_TYPE_SPECIFIERS_INDEX_ENUM
+))
+CONFLICTS_WITH(SIGNED, TYPE_SPECIFIERS_LIST(
+  P_TYPE_SPECIFIERS_INDEX_UNSIGNED,
+  P_TYPE_SPECIFIERS_INDEX_TYPEDEF,
+  P_TYPE_SPECIFIERS_INDEX_STRUCT,
+  P_TYPE_SPECIFIERS_INDEX_UNION,
+  P_TYPE_SPECIFIERS_INDEX_ENUM
+))
+CONFLICTS_WITH(UNSIGNED, TYPE_SPECIFIERS_LIST(
+  P_TYPE_SPECIFIERS_INDEX_SIGNED,
+  P_TYPE_SPECIFIERS_INDEX_TYPEDEF,
+  P_TYPE_SPECIFIERS_INDEX_STRUCT,
+  P_TYPE_SPECIFIERS_INDEX_UNION,
+  P_TYPE_SPECIFIERS_INDEX_ENUM
+))
+CONFLICTS_WITH(BOOL, TYPE_SPECIFIERS_LIST(
+  P_TYPE_SPECIFIERS_INDEX_COMPLEX,
+  P_TYPE_SPECIFIERS_INDEX_IMAGINARY,
+  P_TYPE_SPECIFIERS_INDEX_TYPEDEF,
+  P_TYPE_SPECIFIERS_INDEX_STRUCT,
+  P_TYPE_SPECIFIERS_INDEX_UNION,
+  P_TYPE_SPECIFIERS_INDEX_ENUM
+))
+CONFLICTS_WITH(COMPLEX, TYPE_SPECIFIERS_LIST(
+  P_TYPE_SPECIFIERS_INDEX_IMAGINARY,
+  P_TYPE_SPECIFIERS_INDEX_TYPEDEF,
+  P_TYPE_SPECIFIERS_INDEX_STRUCT,
+  P_TYPE_SPECIFIERS_INDEX_UNION,
+  P_TYPE_SPECIFIERS_INDEX_ENUM
+))
+CONFLICTS_WITH(IMAGINARY, TYPE_SPECIFIERS_LIST(
+  P_TYPE_SPECIFIERS_INDEX_TYPEDEF,
+  P_TYPE_SPECIFIERS_INDEX_STRUCT,
+  P_TYPE_SPECIFIERS_INDEX_UNION,
+  P_TYPE_SPECIFIERS_INDEX_ENUM
+))
+CONFLICTS_WITH(ATOMIC, TYPE_SPECIFIERS_LIST())
+CONFLICTS_WITH(TYPEDEF, TYPE_SPECIFIERS_LIST(
+  P_TYPE_SPECIFIERS_INDEX_STRUCT,
+  P_TYPE_SPECIFIERS_INDEX_UNION,
+  P_TYPE_SPECIFIERS_INDEX_ENUM
+))
+CONFLICTS_WITH(STRUCT, TYPE_SPECIFIERS_LIST(
+  P_TYPE_SPECIFIERS_INDEX_UNION,
+  P_TYPE_SPECIFIERS_INDEX_ENUM
+))
+CONFLICTS_WITH(UNION, TYPE_SPECIFIERS_LIST(
+  P_TYPE_SPECIFIERS_INDEX_ENUM
+))
+CONFLICTS_WITH(ENUM, TYPE_SPECIFIERS_LIST())
+static struct { size_t n_conflicts;
+                P_TypeSpecifiersIndex *conflicts; } conflict_table[N_TYPE_SPECIFIER_KEYWORDS] =
+{
+#define emit_conflict_table_entry(shortname) \
+  { sizeof(conflicts_with_##shortname)/sizeof(conflicts_with_##shortname[0]), \
+    conflicts_with_##shortname },
+  P_TYPE_SPECIFIER_KEYWORD_FOREACH(emit_conflict_table_entry)
+};
+#undef emit_conflict_table_entry
+
+
+static const char *
+count_index_to_keyword (unsigned i)
+{
+  switch (i)
+    {
+    case P_TYPE_SPECIFIERS_INDEX_VOID: return "void";
+    case P_TYPE_SPECIFIERS_INDEX_CHAR: return "char";
+    case P_TYPE_SPECIFIERS_INDEX_INT: return "int";
+    case P_TYPE_SPECIFIERS_INDEX_SHORT: return "short";
+    case P_TYPE_SPECIFIERS_INDEX_LONG: return "long";
+    case P_TYPE_SPECIFIERS_INDEX_UNSIGNED: return "unsigned";
+    case P_TYPE_SPECIFIERS_INDEX_SIGNED: return "signed";
+    case P_TYPE_SPECIFIERS_INDEX_FLOAT: return "float";
+    case P_TYPE_SPECIFIERS_INDEX_DOUBLE: return "double";
+    case P_TYPE_SPECIFIERS_INDEX_BOOL: return "bool";
+    case P_TYPE_SPECIFIERS_INDEX_ATOMIC: return "_Atomic";
+    case P_TYPE_SPECIFIERS_INDEX_COMPLEX: return "_Complex";
+    case P_TYPE_SPECIFIERS_INDEX_IMAGINARY: return "_Imaginary";
+    case P_TYPE_SPECIFIERS_INDEX_TYPEDEF: return "typedef";
+    case P_TYPE_SPECIFIERS_INDEX_STRUCT: return "struct";
+    case P_TYPE_SPECIFIERS_INDEX_UNION: return "union";
+    case P_TYPE_SPECIFIERS_INDEX_ENUM: return "enum";
+    default: return "unknSown-type-specifier";
+    }
+}
+
+typedef struct
+{
+  uint8_t counts[N_TYPE_SPECIFIER_KEYWORDS];
+  DBCC_Symbol *id;              // for named structs, unions, enums
+  bool is_stub;                 // for forward-declared structs+unions+enums
+  unsigned n_elements;          // for structs,unions,enums
+  union {
+    P_EnumeratorList v_enumerator_list;
+    P_DeclarationList v_declaration_list;
+  };
+  DBCC_Type *atomic_type;
+  DBCC_Type *typedef_type;
+} P_TypeSpecifiers;
+#define P_TYPE_SPECIFIERS_INIT \
+    (P_TypeSpecifiers) \
+        {{0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},NULL,false,0,{{NULL,NULL}},NULL,NULL}
+
+static bool
+p_type_specifiers_combine (P_Context *context,
+                           P_TypeSpecifiers *in_out,
+                           P_TypeSpecifiers *modifier)
+{
+  for (unsigned i = 0; i < N_TYPE_SPECIFIER_KEYWORDS; i++)
+    {
+      uint8_t sum = in_out->counts[i] + modifier->counts[i];
+      if (sum < in_out->counts[i]
+       || sum > max_instances_of_counts[i])
+        {
+          context->error = dbcc_error_new (DBCC_ERROR_TOO_MANY_TYPE_SPECIFIERS,
+                                           "too many repeated qualifiers: at %s",
+                                           count_index_to_keyword (i));
+          return false;
+        }
+      in_out->counts[i] = sum;
+    }
+  for (unsigned i = 0; i < N_TYPE_SPECIFIER_KEYWORDS; i++)
+    if (in_out->counts[i] != 0)
+      {
+        unsigned nc = conflict_table[i].n_conflicts;
+        const P_TypeSpecifiersIndex *c = conflict_table[i].conflicts;
+        for (unsigned j = 0; j < nc; j++)
+          if (in_out->counts[c[j]] != 0)
+            {
+              context->error = dbcc_error_new (DBCC_ERROR_CONFLICTING_QUALIFIERS,
+                                               "'%s' is not allowed with '%s'",
+                                               count_index_to_keyword (i),
+                                               count_index_to_keyword (c[j]));
+              return false;
+            }
+      }
+  return true;
+}
+
+static void
+p_type_specifiers_init_struct (P_TypeSpecifiers *to_init,
+                               DBCC_Symbol      *symbol,
+                               P_DeclarationList *declaration_list)
+{
+  ...
+}
+
+static void p_declaration_list_clear (P_DeclarationList *list);
+static void
+p_type_specifiers_clear (P_TypeSpecifiers *ts)
+{
+  if (ts->counts[P_TYPE_SPECIFIERS_INDEX_ENUM] != 0)
+    {
+      p_enumerator_list_clear (&ts->v_enumerator_list);
+    }
+  else if (ts->counts[P_TYPE_SPECIFIERS_INDEX_STRUCT] != 0
+   ||      ts->counts[P_TYPE_SPECIFIERS_INDEX_UNION] != 0)
+    {
+      p_declaration_list_clear (&ts->v_declaration_list);
+    }
+}
+
+struct P_Declaration
+{
+  P_DeclarationType type;
+  P_Declaration *next;
+  union {
+    struct {
+      DBCC_StorageClassSpecifier storage_class_specifiers;
+      DBCC_FunctionSpecifiers function_specifiers;
+      DBCC_TypeQualifier qualifiers;
+      P_AlignmentSpecifier *alignment_specifier;
+      P_TypeSpecifiers specifiers;
+      P_DeclaratorList declarators;
+    } v_declaration;
+    struct {
+      DBCC_Expr *constant_expr;
+      DBCC_String message;
+    } v_static_assertion;
+  };
+};
+
+static P_Declaration *
+p_declaration_new (void)
+{
+  P_Declaration *rv = malloc (sizeof (P_Declaration));
+  rv->type = P_DECLARATION_TYPE_DECLARATION;
+  rv->next = NULL;
+  rv->v_declaration.qualifiers = 0;
+  rv->v_declaration.storage_class_specifiers = 0;
+  rv->v_declaration.function_specifiers = 0;
+  rv->v_declaration.specifiers = P_TYPE_SPECIFIERS_INIT;
+  rv->v_declaration.declarators.first_declarator = NULL;
+  rv->v_declaration.declarators.last_declarator = NULL;
+  return rv;
+}
+
+static P_Declarator *
+p_declarator_new_pointer (DBCC_TypeQualifier qualifiers,
+                          P_Declarator *child)
+{
+  P_Declarator *rv = malloc (sizeof(P_Declarator));
+  rv->declarator_type = P_DECLARATOR_TYPE_POINTER;
+  rv->prev = rv->next = NULL;
+  rv->v_pointer.qualifiers = qualifiers;
+  rv->v_pointer.target = child;
+  rv->initializer = NULL;
+  return rv;
+}
+
+static P_Declarator *
+p_declarator_new_array   (DBCC_TypeQualifier qualifiers,
+                          DBCC_Expr    *size,
+                          P_Declarator *child)
+{
+  P_Declarator *rv = malloc (sizeof(P_Declarator));
+  rv->declarator_type = P_DECLARATOR_TYPE_ARRAY;
+  rv->prev = rv->next = NULL;
+  rv->v_array.qualifiers = qualifiers;
+  rv->v_array.child = child;
+  rv->v_array.size = size;
+  rv->initializer = NULL;
+  return rv;
+}
+
+static P_Declarator *
+p_declarator_new_name    (DBCC_Symbol  *symbol)
+{
+  P_Declarator *rv = malloc (sizeof(P_Declarator));
+  rv->declarator_type = P_DECLARATOR_TYPE_NAME;
+  rv->prev = rv->next = NULL;
+  rv->v_name = symbol;
+  rv->initializer = NULL;
+  return rv;
+}
+
+
+static void
+p_declarator_destroy     (P_Declarator *d)
+{
+  switch (d->declarator_type)
+    {
+    case P_DECLARATOR_TYPE_POINTER:
+      p_declarator_destroy (d->v_pointer.target);
+      break;
+    case P_DECLARATOR_TYPE_ARRAY:
+      p_declarator_destroy (d->v_array.child);
+      dbcc_expr_destroy (d->v_array.size);
+      break;
+    case P_DECLARATOR_TYPE_VARLEN_ARRAY:
+      p_declarator_destroy (d->v_varlen_array.child);
+      break;
+    case P_DECLARATOR_TYPE_NAME:
+      break;
+    default:
+      assert(0);
+    }
+  free (d);
+}
+
+
+static void
+p_declaration_append_declarator (P_Declaration *parent,
+                                 P_Declarator  *child)
+{
+  assert(parent->type == P_DECLARATION_TYPE_DECLARATION);
+  if (parent->v_declaration.declarators.first_declarator == NULL)
+    parent->v_declaration.declarators.first_declarator = child;
+  else
+    parent->v_declaration.declarators.last_declarator->next = child;
+  parent->v_declaration.declarators.last_declarator = child;
+  child->next = NULL;
+}
+
+static void p_declarator_list_clear (P_DeclaratorList *list);
+static void p_declaration_destroy (P_Declaration *decl)
+{
+  switch (decl->type)
+    {
+    case P_DECLARATION_TYPE_STATIC_ASSERT:
+      dbcc_expr_destroy (decl->v_static_assertion.constant_expr);
+      dbcc_string_clear (&decl->v_static_assertion.message);
+      break;
+    case P_DECLARATION_TYPE_DECLARATION:
+      p_type_specifiers_clear (&decl->v_declaration.specifiers);
+      p_declarator_list_clear (&decl->v_declaration.declarators);
+      break;
+    default:
+      assert(0);
+    }
+  free (decl);
+}
+static void
+p_declaration_list_clear (P_DeclarationList *list)
+{
+  while (list->first_declaration != NULL)
+    {
+      P_Declaration *kill = list->first_declaration;
+      list->first_declaration = kill->next;
+      p_declaration_destroy (kill);
+    }
+  list->last_declaration = NULL;
+}
+static void
+p_declarator_list_clear (P_DeclaratorList *list)
+{
+  while (list->first_declarator != NULL)
+    {
+      P_Declarator *kill = list->first_declarator;
+      list->first_declarator = kill->next;
+      p_declarator_destroy (kill);
+    }
+  list->last_declarator = NULL;
+}
+
+struct P_ParameterList
+{
+  P_DeclarationList parameters;
+  bool has_varargs;
+};
+static void
+p_parameter_list_clear (P_ParameterList *list)
+{
+  p_declaration_list_clear(&list->parameters);
+}
+
+typedef struct P_ExprList P_ExprList;
+typedef struct P_ExprNode P_ExprNode;
+struct P_ExprList
+{
+  P_ExprNode *first, *last;
+};
+struct P_ExprNode
+{
+  DBCC_Expr *expr;
+  P_ExprNode *next;
+};
+static P_ExprNode *p_expr_node_new (DBCC_Expr *expr)
+{
+  P_ExprNode *rv = malloc (sizeof (P_ExprNode));
+  rv->expr = expr;
+  rv->next = NULL;
+  return rv;
+}
+static void
+p_expr_node_destroy (P_ExprNode *node)
+{
+  dbcc_expr_destroy (node->expr);
+  free (node);
+}
+static void
+p_expr_list_clear (P_ExprList *list)
+{
+  while (list->first != NULL)
+    {
+      P_ExprNode *kill = list->first;
+      list->first= kill->next;
+      p_expr_node_destroy (kill);
+    }
+  list->last = NULL;
+}
+
+typedef struct P_StatementList P_StatementList;
+typedef struct P_StatementNode P_StatementNode;
+struct P_StatementList
+{
+  P_StatementNode *first, *last;
+};
+struct P_StatementNode
+{
+  DBCC_Statement *statement;
+  P_StatementNode *prev, *next;
+};
+static void
+p_statement_node_destroy (P_StatementNode *node)
+{
+  dbcc_statement_destroy (node->statement);
+  free (node);
+}
+static void
+p_statement_list_clear (P_StatementList *list)
+{
+  while (list->first != NULL)
+    {
+      P_StatementNode *kill = list->first;
+      list->first= kill->next;
+      p_statement_node_destroy (kill);
+    }
+  list->last = NULL;
+}
+
+
+static P_AlignmentSpecifier *
+p_alignment_specifier_new_by_type (DBCC_Type *type)
+{
+  P_AlignmentSpecifier *rv = malloc (sizeof (P_AlignmentSpecifier));
+  rv->specifier_type = P_ALIGNMENT_SPECIFIER_BY_TYPE;
+  rv->v_type = type;
+  return rv;
+}
+static P_AlignmentSpecifier *
+p_alignment_specifier_new_by_expr (DBCC_Expr *expr)
+{
+  P_AlignmentSpecifier *rv = malloc (sizeof (P_AlignmentSpecifier));
+  rv->specifier_type = P_ALIGNMENT_SPECIFIER_BY_EXPR;
+  rv->v_expr = expr;
+  return rv;
+}
+  
+static void
+p_alignment_specifier_destroy (P_AlignmentSpecifier *spec)
+{
+  switch (spec->specifier_type)
+    {
+    case P_ALIGNMENT_SPECIFIER_BY_TYPE:
+      dbcc_type_unref (spec->v_type);
+      spec->v_type = NULL;
+      break;
+    case P_ALIGNMENT_SPECIFIER_BY_EXPR:
+      dbcc_expr_destroy (spec->v_expr);
+      spec->v_type = NULL;
+      break;
+    }
+  free (spec);
+}
+
+
 // A designator is how by-name structure members or array elements are initialized.
 // Note that there's a list of these b/c you can do things like:
 //     Obj a = { .x.value[4] = 42 };
-
 struct P_Designator
 {
   bool is_array;
   union {
     DBCC_Expr *v_array_index;
-    DBCC_Symbol *object_member;
+    DBCC_Symbol *v_struct_member;
   };
-  P_Designator *prev, *next;
+  P_Designator *next;
 };
+static void 
+p_designator_destroy (P_Designator *p)
+{
+  if (p->is_array)
+    {
+      if (p->v_array_index != NULL)
+        dbcc_expr_destroy (p->v_array_index);
+    }
+  else
+    {
+      //object_member
+    }
+  free (p);
+}
+static void
+p_designator_list_clear (P_DesignatorList *list)
+{
+  while (list->first != NULL)
+    {
+      P_Designator *kill = list->first;
+      list->first = kill->next;
+      p_designator_destroy (kill);
+    }
+  list->last = NULL;
+}
 
+
+static void
+structured_initializer_from_p_initializer_list (P_InitializerList *list,
+                                                DBCC_StructuredInitializer *out);
+static void
+structured_initializer_piece_from_p_initializer (P_Initializer *zer,
+                                                 DBCC_StructuredInitializerPiece *out)
+{
+  size_t n_designators = 0;
+  for (P_Designator *at = zer->designators.first; at; at = at->next)
+    n_designators++;
+  DBCC_Designator *designators;
+  if (n_designators == 0)
+    designators = NULL;
+  else
+    designators = malloc (sizeof (DBCC_Designator) * n_designators);
+  size_t di = 0;
+  for (P_Designator *at = zer->designators.first; at != NULL; at = at->next, di++)
+    {
+      if (at->is_array)
+        {
+          designators[di].type = DBCC_DESIGNATOR_INDEX;
+          designators[di].v_index = at->v_array_index;
+        }
+      else
+        {
+          designators[di].type = DBCC_DESIGNATOR_MEMBER;
+          designators[di].v_member = at->v_struct_member;
+        }
+    }
+  out->n_designators = n_designators;
+  out->designators = designators;
+  switch (zer->initializer_type)
+    {
+    case P_INITIALIZER_TYPE_BRACED:
+      structured_initializer_from_p_initializer_list (&zer->v_children, &out->v_structured_initializer);
+      out->is_expr = false;
+      break;
+    case P_INITIALIZER_TYPE_SCALAR:
+      out->v_expr = zer->v_scalar;
+      out->is_expr = true;
+      break;
+    }
+}
+static void
+structured_initializer_from_p_initializer_list (P_InitializerList *list,
+                                                DBCC_StructuredInitializer *out)
+{
+  size_t count = 0;
+  for (P_Initializer *init = list->first; init != NULL; init = init->next)
+    count++;
+  out->n_pieces = count;
+  out->pieces = malloc (count * sizeof (DBCC_StructuredInitializerPiece));
+  size_t i = 0;
+  for (P_Initializer *init = list->first; init != NULL; init = init->next)
+    {
+      structured_initializer_piece_from_p_initializer (init, out->pieces + i);
+      i++;
+    }
+}
+
+
+static void
+error_set_code_location_from_expr (P_Context *context, DBCC_Expr *expr)
+{
+  if (expr->base.code_position != NULL)
+    dbcc_error_add_code_position (context->error, expr->base.code_position);
+}
 
 }
 ////// end of "included" code
+
+%extra_argument {P_Context *context}
 
 /* Conversion to Lemon was done Mar 2018 by Dave Benson */
 %start_symbol translation_unit
 %type generic_association           {P_GenericAssociation *}
 %type optional_comma                {int}
-%type enumeration_constant          {TODO}
+%type enumeration_constant          {DBCC_Symbol *}
 %type declaration                   {P_Declaration *}
 %type external_declaration          {P_Declaration *}
 %type parameter_declaration         {P_Declaration *}
@@ -306,7 +1054,8 @@ struct P_Designator
 %type struct_declarator             {P_Declarator *}
 %type function_definition           {P_Declarator *}
 
-%type designation                   {TODO}
+%type opt_designation               {P_DesignatorList}
+%type designation                   {P_DesignatorList}
 %type designator                    {P_Designator *}
 %type enumerator                    {P_Enumerator *}
 
@@ -343,28 +1092,32 @@ struct P_Designator
 %type init_declarator_list          {P_DeclaratorList}
 %type initializer_list              {P_InitializerList}
 %type opt_declaration_list          {P_DeclarationList}
-%type parameter_list                {P_ParameterList}
-%type parameter_type_list           {P_ParameterTypeList}
-%type specifier_qualifier_list      {P_SpecifierQualifierList}
+%type parameter_list                {P_DeclarationList}
+
+/* same a P_DeclarationList, except support for varargs */
+%type parameter_type_list           {P_ParameterList} 
+
+%type specifier_qualifier_list      {P_Declaration *}
 %type struct_declaration_list       {P_DeclarationList}
 %type struct_declarator_list        {P_DeclaratorList}
 %type type_name                     {DBCC_Type *}
 %type assignment_operator           {DBCC_InplaceBinaryOperator}
 %type unary_operator                {DBCC_UnaryOperator}
 %type identifier_list               {P_IdentifierList}
+%type opt_identifier                {DBCC_Symbol *}
 
 %type opt_type_qualifier_list       {DBCC_TypeQualifier}
 %type type_qualifier_list           {DBCC_TypeQualifier}
 %type type_qualifier                {DBCC_TypeQualifier}
-%type alignment_specifier           {P_AlignmentSpecifier}
-%type enum_specifier                {P_TypeSpecifier *}
-%type function_specifier            {P_TypeSpecifier *}
+%type alignment_specifier           {P_AlignmentSpecifier *}
+%type enum_specifier                {P_TypeSpecifiers}
+%type function_specifier            {DBCC_FunctionSpecifiers}
 %type storage_class_specifier       {DBCC_StorageClassSpecifier}
-%type struct_specifier              {P_TypeSpecifier *}
-%type type_specifier                {P_TypeSpecifier *}
-%type union_specifier               {P_TypeSpecifier *}
-%type declaration_specifiers        {P_DeclarationSpecifier *}
-%type opt_declaration_specifiers    {P_DeclarationSpecifier *}
+%type struct_specifier              {P_TypeSpecifiers}
+%type type_specifier                {P_TypeSpecifiers}
+%type union_specifier               {P_TypeSpecifiers}
+%type declaration_specifiers        {P_Declaration *}
+%type opt_declaration_specifiers    {P_Declaration *}
 %type statement                     {DBCC_Statement*}
 %type block_item                    {DBCC_Statement*}
 %type compound_statement            {DBCC_Statement*}
@@ -378,78 +1131,231 @@ struct P_Designator
 %type external_declaration_list     {P_DeclarationList}
 %type translation_unit              {P_DeclarationList}
 
+%token_type {P_Token}
+%token_prefix {P_TOKEN_}
+
+%destructor generic_association           {p_generic_association_destroy($$);}
+%destructor declaration                   {p_declaration_destroy($$);}
+%destructor external_declaration          {p_declaration_destroy($$);}
+%destructor parameter_declaration         {p_declaration_destroy($$);}
+%destructor static_assert_declaration     {p_declaration_destroy($$);}
+%destructor struct_declaration            {p_declaration_destroy($$);}
+
+%destructor declarator                    {p_declarator_destroy($$);}
+%destructor direct_abstract_declarator    {p_declarator_destroy($$);}
+%destructor abstract_declarator           {p_declarator_destroy($$);}
+%destructor direct_declarator             {p_declarator_destroy($$);}
+%destructor init_declarator               {p_declarator_destroy($$);}
+%destructor struct_declarator             {p_declarator_destroy($$);}
+%destructor function_definition           {p_declarator_destroy($$);}
+
+%destructor opt_designation               {p_designator_list_clear(&$$);}
+%destructor designation                   {p_designator_list_clear(&$$);}
+%destructor designator                    {p_designator_destroy($$);}
+%destructor enumerator                    {p_enumerator_destroy($$);}
+
+%destructor expression                    {dbcc_expr_destroy($$);}
+%destructor additive_expression           {dbcc_expr_destroy($$);}
+%destructor and_expression                {dbcc_expr_destroy($$);}
+%destructor assignment_expression         {dbcc_expr_destroy($$);}
+%destructor cast_expression               {dbcc_expr_destroy($$);}
+%destructor conditional_expression        {dbcc_expr_destroy($$);}
+%destructor constant_expression           {dbcc_expr_destroy($$);}
+%destructor equality_expression           {dbcc_expr_destroy($$);}
+%destructor exclusive_or_expression       {dbcc_expr_destroy($$);}
+%destructor inclusive_or_expression       {dbcc_expr_destroy($$);}
+%destructor logical_and_expression        {dbcc_expr_destroy($$);}
+%destructor logical_or_expression         {dbcc_expr_destroy($$);}
+%destructor multiplicative_expression     {dbcc_expr_destroy($$);}
+%destructor postfix_expression            {dbcc_expr_destroy($$);}
+%destructor primary_expression            {dbcc_expr_destroy($$);}
+%destructor relational_expression         {dbcc_expr_destroy($$);}
+%destructor shift_expression              {dbcc_expr_destroy($$);}
+%destructor unary_expression              {dbcc_expr_destroy($$);}
+%destructor generic_selection             {dbcc_expr_destroy($$);}
+
+// unlike the above DBCC_Expr* nonterminals, this may be  NULL */
+%destructor opt_expression                {if ($$) dbcc_expr_destroy($$);}
+
+%destructor initializer                   {p_initializer_destroy($$);}
+%destructor argument_expression_list      {p_expr_list_clear(&$$);}
+%destructor block_item_list               {p_statement_list_clear(&$$);}
+%destructor declaration_list              {p_declaration_list_clear(&$$);}
+%destructor designator_list               {p_designator_list_clear(&$$);}
+%destructor enumerator_list               {p_enumerator_list_clear(&$$);}
+%destructor generic_assoc_list            {p_generic_association_list_clear(&$$);}
+%destructor init_declarator_list          {p_declarator_list_clear(&$$);}
+%destructor initializer_list              {p_initializer_list_clear(&$$);}
+%destructor opt_declaration_list          {p_declaration_list_clear(&$$);}
+%destructor parameter_list                {p_declaration_list_clear(&$$);}
+
+// a P_DeclarationList, except support for varargs */
+%destructor parameter_type_list           {p_parameter_list_clear(&$$);}
+
+%destructor specifier_qualifier_list      {p_declaration_destroy($$);}
+%destructor struct_declaration_list       {p_declaration_list_clear(&$$);}
+%destructor struct_declarator_list        {p_declarator_list_clear(&$$);}
+%destructor type_name                     {dbcc_type_unref($$);}
+%destructor identifier_list               {p_identifier_list_clear(&$$);}
+%destructor opt_identifier                {}//TODO: symbol_unref
+
+%destructor alignment_specifier           {p_alignment_specifier_destroy($$);}
+%destructor enum_specifier                {p_type_specifiers_clear(&$$);}
+%destructor struct_specifier              {p_type_specifiers_clear(&$$);}
+%destructor type_specifier                {p_type_specifiers_clear(&$$);}
+%destructor union_specifier               {p_type_specifiers_clear(&$$);}
+%destructor declaration_specifiers        {p_declaration_destroy($$);}
+%destructor opt_declaration_specifiers    {p_declaration_destroy($$);}
+%destructor statement                     {dbcc_statement_destroy($$);}
+%destructor block_item                    {dbcc_statement_destroy($$);}
+%destructor compound_statement            {dbcc_statement_destroy($$);}
+%destructor expression_statement          {dbcc_statement_destroy($$);}
+%destructor iteration_statement           {dbcc_statement_destroy($$);}
+%destructor jump_statement                {dbcc_statement_destroy($$);}
+%destructor labeled_statement             {dbcc_statement_destroy($$);}
+%destructor selection_statement           {dbcc_statement_destroy($$);}
+%destructor string                        {dbcc_string_clear(&$$);}
+%destructor external_declaration_list     {p_declaration_list_clear(&$$);}
+%destructor translation_unit              {(void)context;
+                                           p_declaration_list_clear(&$$);}
+
+
 primary_expression(rv) ::= IDENTIFIER(id).
-        { rv = dbcc_expr_new_symbol (id.symbol); }
+        { DBCC_NamespaceEntry ns_entry;
+          if (!p_context_lookup (context, id.symbol, id.code_position, &ns_entry))
+            return;             /// error set by p_context_lookup
+
+          // for purposes for the grammar,
+          //     DBCC_NAMESPACE_ENTRY_ENUM_VALUE
+          // and 
+          //     DBCC_NAMESPACE_ENTRY_TYPEDEF
+          // should already have been handled at lexing time.
+          assert(ns_entry.entry_type == DBCC_NAMESPACE_ENTRY_GLOBAL);
+
+          rv = dbcc_expr_new_symbol (id.symbol);
+        }
 primary_expression(rv) ::= I_CONSTANT(c).
-        { rv = dbcc_expr_new_int_constant (c->v_int_constant); }
+        { rv = dbcc_expr_new_int_constant (c.string.str, &context->error); }
 primary_expression(rv) ::= F_CONSTANT(c).
-        { rv = dbcc_expr_new_float_constant (c->v_float_constant); }
+        { rv = dbcc_expr_new_float_constant (c.string.str, &context->error); }
 primary_expression(rv) ::= ENUMERATION_CONSTANT(c).
-        { rv = dbcc_expr_new_enum_constant (c->info.v_enumeration_constant); }
+        { DBCC_NamespaceEntry ns_entry;
+          if (!p_context_lookup (context, c.symbol, c.code_position, &ns_entry))
+            assert(0);
+          assert(ns_entry.entry_type == DBCC_NAMESPACE_ENTRY_ENUM_VALUE);
+          rv = dbcc_expr_new_enum_constant (ns_entry.v_enum_value); }
 primary_expression(rv) ::= string(s).
-        { rv = dbcc_expr_new_constant_string (s); s = NULL; }
+        { rv = dbcc_expr_new_string_constant (&s);
+          s.str = NULL; }
 primary_expression(rv) ::= LPAREN expression(e) RPAREN.
         { rv = e; e = NULL; }
 primary_expression(rv) ::= generic_selection(g).
         { rv = g; g = NULL; }
 
+// enumeration_constant is an identifier that is suitable for making into a EnumValue
 enumeration_constant(rv) ::= IDENTIFIER(s).
-	{ /* XXX: must verify v_symbol is valid */
-          rv = s->v_symbol; }
+	{ 
+          assert(s.symbol != NULL);
+          rv = s.symbol;
+        }
 
 string(rv) ::= STRING_LITERAL(s).
-        { rv = s->info.v_string_literal; s->info.v_string_literal = NULL; }
-string(rv) ::= FUNC_NAME(s).
-        { rv = s->info.v_func_name; s->info.v_func_name = NULL; }
+        { rv = s.string; }
 
-generic_selection(rv) ::= GENERIC LPAREN assignment_expression(expr) COMMA generic_assoc_list(list) RPAREN.
-        { list = dbcc_generic_assoc_list_reverse (list);
-          rv = dbcc_expr_new_generic_selection (expr, list); }
+string(rv) ::= FUNC_NAME(s).
+        { rv.str = strdup (dbcc_symbol_get_string (s.symbol));
+          rv.length = s.symbol->length;
+        }
+
+generic_selection(rv) ::= GENERIC LPAREN assignment_expression(key_expr) COMMA generic_assoc_list(list) RPAREN.
+        { DBCC_Expr *def_expr = NULL;
+          unsigned count = 0;
+          for (P_GenericAssociation *ass = list.first; ass != NULL; ass = ass->next)
+            if (ass->type == NULL)
+              def_expr = ass->expr;
+            else
+              count++;
+          unsigned i = 0;
+          DBCC_GenericAssociation *assocs = malloc (sizeof (DBCC_GenericAssociation) * count);
+
+          for (P_GenericAssociation *ass = list.first; ass != NULL; ass = ass->next)
+            if (ass->type != NULL)
+              {
+                assocs[i].type = ass->type;
+                assocs[i].expr = ass->expr;
+                i++;
+              }
+          while (list.first != NULL)
+            {
+              P_GenericAssociation *a = list.first;
+              list.first = a->next;
+              free (a);
+            }
+          list.last = NULL;
+          rv = dbcc_expr_new_generic_selection (key_expr, count, assocs, def_expr);
+        }
 
 generic_assoc_list(list) ::= generic_association(assoc).
-        { list = assoc; assoc->next = NULL; assoc = NULL; }
+        { list.first = list.last = assoc; assoc->next = NULL; assoc = NULL; }
 generic_assoc_list(list) ::= generic_assoc_list(in) COMMA generic_association(assoc).
-        { list = assoc; assoc->next = in; in = NULL; assoc = NULL; }
+        { list = in;
+          list.last->next = assoc;
+          assoc->next = NULL;
+          list.last = assoc; }
 
 generic_association(assoc) ::= type_name(name) COLON assignment_expression(expr).
-        { assoc = dbcc_generic_assoc_list_new (name, expr);
-          name = NULL; expr = NULL; }
+        { assoc = p_generic_association_new (name, expr); }
 generic_association(assoc) ::= DEFAULT COLON assignment_expression(expr).
-        { assoc = dbcc_generic_assoc_list_new_default (name, expr);
-          expr = NULL; }
+        { assoc = p_generic_association_new (NULL, expr); }
 
 postfix_expression(rv) ::= primary_expression(a).
         { rv = a; a = NULL; }
 postfix_expression(rv) ::= postfix_expression(a) LBRACKET expression(expr) RBRACKET.
         { rv = dbcc_expr_new_subscript (a, expr); a = NULL; expr = NULL; }
 postfix_expression(rv) ::= postfix_expression(head) LPAREN RPAREN.
-        { rv = dbcc_expr_new_call (head, NULL); head = NULL; }
+        { rv = dbcc_expr_new_call (head, 0, NULL); }
 
 postfix_expression(rv) ::= postfix_expression(head) LPAREN argument_expression_list(list) RPAREN.
-        { list = dbcc_argument_expression_list_reverse (list);
-          rv = dbcc_expr_new_call (head, list); head = NULL; list = NULL; }
+        { size_t count = 0;
+          for (P_ExprNode *at = list.first; at != NULL; at = at->next)
+            count++;
+          DBCC_Expr **args = malloc (sizeof (DBCC_Expr *) * count);
+          unsigned i = 0;
+          while (list.first != NULL)
+            {
+              P_ExprNode *kill = list.first;
+              args[i++] = kill->expr;
+              list.first = kill->next;
+              free(kill);
+            }
+          rv = dbcc_expr_new_call (head, count, args); }
 
 postfix_expression(rv) ::= postfix_expression(head) DOT IDENTIFIER(id).
-        { rv = dbcc_expr_new_member_access(head, id->info.v_symbol);
-          head = NULL; id->info.v_symbol = NULL; }
+        { rv = dbcc_expr_new_member_access(head, id.symbol);
+        }
 
 postfix_expression(rv) ::= postfix_expression(head) PTR_OP IDENTIFIER(id).
-        { rv = dbcc_expr_new_pointer_access(head, id->info.v_symbol);
-          head = NULL; id->info.v_symbol = NULL; }
+        { rv = dbcc_expr_new_pointer_access (head, id.symbol); }
 postfix_expression(rv) ::= postfix_expression(expr) INC_OP.
-        { rv = dbcc_expr_new_inplace_unary(DBCC_INPLACE_UNARY_OPERATOR_POST_INCR, expr); expr = NULL; }
+        { rv = dbcc_expr_new_inplace_unary(DBCC_INPLACE_UNARY_OPERATOR_POST_INCR, expr); }
 postfix_expression(rv) ::= postfix_expression(expr) DEC_OP.
-        { rv = dbcc_expr_new_inplace_unary(DBCC_INPLACE_UNARY_OPERATOR_POST_DECR, expr); expr = NULL; }
+        { rv = dbcc_expr_new_inplace_unary(DBCC_INPLACE_UNARY_OPERATOR_POST_DECR, expr); }
 postfix_expression(rv) ::= LPAREN type_name(type) RPAREN LBRACE initializer_list(list) optional_comma RBRACE.
-        { rv = ... }
+        { DBCC_StructuredInitializer sinit;
+          structured_initializer_from_p_initializer_list (&list, &sinit);
+          rv = dbcc_expr_new_structured_initializer(type, &sinit);  }
 
 optional_comma ::= COMMA.
 optional_comma ::= .
 
 argument_expression_list(list) ::= assignment_expression(expr).
-        { list = dbcc_argument_expression_list_new (expr, NULL); expr = NULL; }
+        { P_ExprNode *n = p_expr_node_new (expr);
+          list.first = list.last = n; }
 argument_expression_list(list) ::= argument_expression_list(in) COMMA assignment_expression(expr).
-        { list = dbcc_argument_expression_list_new (expr, in); expr = NULL; in = NULL; }
+        { list = in;
+          P_ExprNode *n = p_expr_node_new (expr);
+          list.last->next = n;
+          list.last = n; }
 
 unary_expression(out) ::= postfix_expression(in).
         { out = in; in = NULL; }
@@ -463,16 +1369,16 @@ unary_expression(rv) ::= unary_operator(op) cast_expression(expr).
 unary_expression(rv) ::= SIZEOF unary_expression(expr).
         { rv = dbcc_expr_new_sizeof_expr(expr); expr = NULL; }
 unary_expression(rv) ::= SIZEOF LPAREN type_name(type) RPAREN.
-        { rv = dbcc_expr_new_sizeof_type(type); expr = NULL; }
+        { rv = dbcc_expr_new_sizeof_type(type); }
 unary_expression(rv) ::= ALIGNOF LPAREN type_name(type) RPAREN.
-        { rv = dbcc_expr_new_alignof_type(type); expr = NULL; }
+        { rv = dbcc_expr_new_alignof_type(type); }
 
 unary_operator(rv) ::= AMPERSAND.
         { rv = DBCC_UNARY_OPERATOR_REFERENCE; }
 unary_operator(rv) ::= ASTERISK.
         { rv = DBCC_UNARY_OPERATOR_DEREFERENCE; }
 unary_operator(rv) ::= PLUS.
-        { rv = DBCC_UNARY_OPERATOR_PLUS; }
+        { rv = DBCC_UNARY_OPERATOR_NOOP; }
 unary_operator(rv) ::= MINUS.
         { rv = DBCC_UNARY_OPERATOR_NEGATE; }
 unary_operator(rv) ::= TILDE.
@@ -518,25 +1424,25 @@ shift_expression(rv) ::= shift_expression(a) RIGHT_OP additive_expression(b).
 relational_expression(rv) ::= shift_expression(expr).
         { rv = expr; expr = NULL; }
 relational_expression(rv) ::= relational_expression(a) LT shift_expression(b).
-        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_LESS_THAN, a, b);
+        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_LT, a, b);
           a = b = NULL; }
 relational_expression(rv) ::= relational_expression(a) GT shift_expression(b).
-        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_GREATER_THAN, a, b);
+        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_GT, a, b);
           a = b = NULL; }
 relational_expression(rv) ::= relational_expression(a) LE shift_expression(b).
-        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_LE, a, b);
+        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_LTEQ, a, b);
           a = b = NULL; }
 relational_expression(rv) ::= relational_expression(a) GE shift_expression(b).
-        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_GE, a, b);
+        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_GTEQ, a, b);
           a = b = NULL; }
 
 equality_expression(rv) ::= relational_expression(expr).
         { rv = expr; expr = NULL; }
 equality_expression(rv) ::= equality_expression(a) EQ_OP relational_expression(b).
-        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_EQUALS, a, b);
+        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_EQ, a, b);
           a = b = NULL; }
 equality_expression(rv) ::= equality_expression(a) NE_OP relational_expression(b).
-        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_NOT_EQUALS, a, b);
+        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_NE, a, b);
           a = b = NULL; }
 
 and_expression(rv) ::= equality_expression(expr).
@@ -578,7 +1484,7 @@ conditional_expression(rv) ::= logical_or_expression(a) QUESTION_MARK expression
 assignment_expression(rv) ::= conditional_expression(expr).
         { rv = expr; expr = NULL; }
 assignment_expression(rv) ::= unary_expression(a) assignment_operator(op) assignment_expression(b).
-	{ rv = dbcc_expr_new_inplace_binary (op, a, b); a = b = NULL; }
+	{ rv = dbcc_expr_new_inplace_binary (op, a, b); }
 
 assignment_operator(rv) ::= EQUALS.
         { rv = DBCC_INPLACE_BINARY_OPERATOR_ASSIGN; }
@@ -610,12 +1516,14 @@ expression(rv) ::= expression(a) COMMA assignment_expression(b).
           a = b = NULL; }
 
 constant_expression(rv) ::= conditional_expression(a).
-	{ if (a->constant_value == NULL)
+	{ rv = a;
+          if (rv->base.constant_value == NULL)
             {
-              ...
+              context->error = dbcc_error_new (DBCC_ERROR_CONSTANT_REQUIRED,
+                                 "constant value required");
+              error_set_code_location_from_expr (context, a);
+              return;
             }
-          rv = a;
-          a = NULL;
         }
 
 opt_expression(o) ::= expression(i).
@@ -624,43 +1532,57 @@ opt_expression(o) ::= .
         { o = NULL; }
 
 declaration(rv) ::= declaration_specifiers(specs) SEMICOLON.
-        { ... }
+        { rv = specs; 
+          specs = NULL; }
 declaration(rv) ::= declaration_specifiers(specs) init_declarator_list(names) SEMICOLON.
-        { ... }
+        { rv = specs;
+          while (names.first_declarator != NULL)
+            {
+              P_Declarator *n = names.first_declarator;
+              names.first_declarator = n->next;
+              n->next = NULL;
+              p_declaration_append_declarator (rv, n);
+            }
+        }
 declaration(rv) ::= static_assert_declaration(sadecl).
-        { ... }
+        { rv = sadecl; }
 
 opt_declaration_specifiers(rv) ::= declaration_specifiers(a).
-        { rv = a; a = NULL; }
+        { rv = a; }
 opt_declaration_specifiers(rv) ::= .
-        { rv = dbcc_declaration_specifiers_new (); }
+        { rv = p_declaration_new (); }
 
 declaration_specifiers(rv) ::= storage_class_specifier(scs) opt_declaration_specifiers(a).
-        { rv = a; a = NULL;
-          rv->storage_class_specifiers |= scs; }
+        { rv = a;
+          rv->v_declaration.storage_class_specifiers |= scs; }
 declaration_specifiers(rv) ::= type_specifier(ts) opt_declaration_specifiers(a).
         { rv = a; a = NULL;
-          dbcc_declaration_specifiers_append_type_specifier(rv, ts); 
-          ts = NULL; }
+          if (!p_type_specifiers_combine (context, &a->v_declaration.specifiers, &ts))
+            return;
+        }
 declaration_specifiers(rv) ::= type_qualifier(tq) opt_declaration_specifiers(a).
-        { rv = a; a = NULL;
-          rv->type_qualifiers |= tq; }
+        { rv = a;
+          rv->v_declaration.qualifiers |= tq; }
 declaration_specifiers(rv) ::= alignment_specifier(s) opt_declaration_specifiers(a).
-        { rv = a; a = NULL;
-          dbcc_declaration_specifiers_append_alignment_specifier(s); s = NULL; }
+        { rv = a;
+          if (rv->v_declaration.alignment_specifier != NULL)
+            {
+              context->error = dbcc_error_new (DBCC_ERROR_DUPLICATE,
+                                               "multiple alignment specifies given: not allowed");
+              return;
+            }
+          rv->v_declaration.alignment_specifier = s; }
 declaration_specifiers(rv) ::= function_specifier(fspec).
-        { rv->function_specifiers |= fspec; }
+        { rv->v_declaration.function_specifiers |= fspec; }
 
 init_declarator_list(list) ::= init_declarator(d).
-        { list.first = list.last = d;
+        { list.first_declarator = list.last_declarator = d;
           d->next = NULL; }
 init_declarator_list(list) ::= init_declarator_list(a) COMMA init_declarator(d).
         { list = a;
-          a.first = a.last = NULL;
-          d->next = NULL;
-          list.last->next = d;
-          d->next = NULL;
-          list.last = d; }
+          d->next = NULL;               // unneeded
+          list.last_declarator->next = d;
+          list.last_declarator = d; }
 
 init_declarator(rv) ::= declarator(decl) EQUALS initializer(init).
         { assert(decl->initializer == NULL);
@@ -686,62 +1608,61 @@ storage_class_specifier(rv) ::= REGISTER.
         { rv = DBCC_STORAGE_CLASS_SPECIFIER_REGISTER; }
 
 type_specifier(rv) ::= VOID.
-        { rv = DBCC_TYPE_SPECIFIER_INIT;
-          rv.flags |= DBCC_TYPE_SPECIFIER_FLAG_VOID; }
+        { rv = P_TYPE_SPECIFIERS_INIT;
+          rv.counts[P_TYPE_SPECIFIERS_INDEX_VOID] = 1; }
 type_specifier(rv) ::= CHAR.
-        { rv = DBCC_TYPE_SPECIFIER_INIT;
-          rv.flags |= DBCC_TYPE_SPECIFIER_FLAG_CHAR; }
+        { rv = P_TYPE_SPECIFIERS_INIT;
+          rv.counts[P_TYPE_SPECIFIERS_INDEX_CHAR] = 1; }
 type_specifier(rv) ::= INT.
-        { rv = DBCC_TYPE_SPECIFIER_INIT;
-          rv.flags |= DBCC_TYPE_SPECIFIER_FLAG_INT; }
+        { rv = P_TYPE_SPECIFIERS_INIT;
+          rv.counts[P_TYPE_SPECIFIERS_INDEX_CHAR] = 1; }
 type_specifier(rv) ::= LONG.
-        { rv = DBCC_TYPE_SPECIFIER_INIT;
-          rv.flags |= DBCC_TYPE_SPECIFIER_FLAG_LONG; }
+        { rv = P_TYPE_SPECIFIERS_INIT;
+          rv.counts[P_TYPE_SPECIFIERS_INDEX_CHAR] = 1; }
 type_specifier(rv) ::= FLOAT.
-        { rv = DBCC_TYPE_SPECIFIER_INIT;
-          rv.flags |= DBCC_TYPE_SPECIFIER_FLAG_FLOAT; }
+        { rv = P_TYPE_SPECIFIERS_INIT;
+          rv.counts[P_TYPE_SPECIFIERS_INDEX_CHAR] = 1; }
 type_specifier(rv) ::= DOUBLE.
-        { rv = DBCC_TYPE_SPECIFIER_INIT;
-          rv.flags |= DBCC_TYPE_SPECIFIER_FLAG_DOUBLE; }
+        { rv = P_TYPE_SPECIFIERS_INIT;
+          rv.counts[P_TYPE_SPECIFIERS_INDEX_CHAR] = 1; }
 type_specifier(rv) ::= SIGNED.
-        { rv = DBCC_TYPE_SPECIFIER_INIT;
-          rv.flags |= DBCC_TYPE_SPECIFIER_FLAG_SIGNED; }
+        { rv = P_TYPE_SPECIFIERS_INIT;
+          rv.counts[P_TYPE_SPECIFIERS_INDEX_CHAR] = 1; }
 type_specifier(rv) ::= UNSIGNED.
-        { rv = DBCC_TYPE_SPECIFIER_INIT;
-          rv.flags |= DBCC_TYPE_SPECIFIER_FLAG_UNSIGNED; }
+        { rv = P_TYPE_SPECIFIERS_INIT;
+          rv.counts[P_TYPE_SPECIFIERS_INDEX_CHAR] = 1; }
 type_specifier(rv) ::= BOOL.
-        { rv = DBCC_TYPE_SPECIFIER_INIT;
-          rv.flags |= DBCC_TYPE_SPECIFIER_FLAG_BOOL; }
+        { rv = P_TYPE_SPECIFIERS_INIT;
+          rv.counts[P_TYPE_SPECIFIERS_INDEX_CHAR] = 1; }
 type_specifier(rv) ::= COMPLEX.
-        { rv = DBCC_TYPE_SPECIFIER_INIT;
-          rv.flags |= DBCC_TYPE_SPECIFIER_FLAG_COMPLEX; }
+        { rv = P_TYPE_SPECIFIERS_INIT;
+          rv.counts[P_TYPE_SPECIFIERS_INDEX_CHAR] = 1; }
 type_specifier(rv) ::= IMAGINARY.
-        { rv = DBCC_TYPE_SPECIFIER_INIT;
-          rv.flags |= DBCC_TYPE_SPECIFIER_FLAG_IMAGINARY; }
+        { rv = P_TYPE_SPECIFIERS_INIT;
+          rv.counts[P_TYPE_SPECIFIERS_INDEX_CHAR] = 1; }
 type_specifier(rv) ::= ATOMIC LPAREN type_name(type) RPAREN.
-        { rv = DBCC_TYPE_SPECIFIER_INIT;
-          rv.atomic_type = type; type = NULL; }
+        { rv = P_TYPE_SPECIFIERS_INIT;
+          rv.counts[P_TYPE_SPECIFIERS_INDEX_ATOMIC]++;
+          rv.atomic_type = type; }
 type_specifier(rv) ::= struct_specifier(a).
-        { rv = a; a = NULL; }
+        { rv = a; }
 type_specifier(rv) ::= union_specifier(a).
-        { rv = a; a = NULL; }
+        { rv = a; }
 type_specifier(rv) ::= enum_specifier(a).
-        { rv = a; a = NULL; }
+        { rv = a; }
 type_specifier(rv) ::= TYPEDEF_NAME(t).
-	{ rv = dbcc_type_specifier_new_type (t->info.v_type); t->info.v_type = NULL; }
+	{ rv = P_TYPE_SPECIFIERS_INIT;
+          rv.counts[P_TYPE_SPECIFIERS_INDEX_TYPEDEF] = 1;
+          rv.typedef_type = t.type; }
 
-struct_specifier ::= STRUCT LBRACE struct_declaration_list(list) RBRACE.
-        { rv = dbcc_type_specifier_new_struct (NULL, list); }
-struct_specifier ::= STRUCT IDENTIFIER(id) LBRACE struct_declaration_list(list) RBRACE.
-        { rv = dbcc_type_specifier_new_struct (id->str, list); }
-struct_specifier ::= STRUCT IDENTIFIER.
-        { rv = dbcc_type_specifier_new_struct_stub (id->str); }
-union_specifier  ::= UNION LBRACE struct_declaration_list(list) RBRACE.
-        { rv = dbcc_type_specifier_new_union (NULL, list); }
-union_specifier  ::= UNION IDENTIFIER(id) LBRACE struct_declaration_list(list) RBRACE.
-        { rv = dbcc_type_specifier_new_union (id->str, list); }
-union_specifier  ::= UNION IDENTIFIER.
-        { rv = dbcc_type_specifier_new_union_stub (id->str); }
+struct_specifier(rv) ::= STRUCT opt_identifier(tag) LBRACE struct_declaration_list(list) RBRACE.
+        { p_type_specifiers_init_struct (rv, tag, list); }
+struct_specifier(rv) ::= STRUCT IDENTIFIER(tag_token).
+        { p_type_specifiers_init_struct_stub (rv, tag_token.v_symbol, list); }
+union_specifier(rv)  ::= UNION opt_identifier(tag) LBRACE struct_declaration_list(list) RBRACE.
+        { p_type_specifiers_init_union (rv, tag, list); }
+union_specifier(rv)  ::= UNION IDENTIFIER(id).
+        { p_type_specifiers_init_union_stub (rv, id->str); }
 
 struct_declaration_list(rv) ::= struct_declaration(a).
         { rv.first = rv.last = NULL;
@@ -756,15 +1677,20 @@ struct_declaration_list(rv) ::= struct_declaration_list(in) struct_declaration(a
 struct_declaration(rv) ::= specifier_qualifier_list(in) SEMICOLON.   /* for anonymous struct/union within structs */
         {
           ... assert specifier_qualifier_list must be a struct or union (non-stub)
-          ...
+          rv = in;
+          in = NULL;
         }
-struct_declaration(rv) ::= specifier_qualifier_list struct_declarator_list SEMICOLON.
+struct_declaration(rv) ::= specifier_qualifier_list(list) struct_declarator_list(add) SEMICOLON.
         {
-          ...
+          p_declaration_add_declarator_list(list, &add);
+          rv = list;
+          list = NULL;
+          add.first = add.last = NULL;
         }
 struct_declaration(rv) ::= static_assert_declaration(sadecl).
 	{
-          ...
+          rv = sadecl;
+          sadecl = NULL;
 	}
 
 specifier_qualifier_list(rv) ::= type_specifier(ts) specifier_qualifier_list(a).
@@ -821,7 +1747,23 @@ struct_declarator(sdecl) ::= declarator(decl).
           decl = NULL; }
 
 enum_specifier(rv) ::= ENUM opt_identifier(id) LBRACE enumerator_list(list) opt_comma RBRACE.
-        { ... }
+        { unsigned n_values = 0;
+          for (P_Enumerator *e = list.first; e != NULL; e = e->next)
+            n_values++;
+          DBCC_EnumValue *values = malloc (sizeof (DBCC_EnumValue) * n_values);
+          unsigned i = 0;
+          for (P_Enumerator *e = list.first; e != NULL; e = e->next, i++)
+            {
+              values[i]. ... = ...;
+            }
+          rv = dbcc_type_new_enum (context, id->v_symbol, n_values, values);
+          free (values);
+        }
+
+opt_identifier(rv) ::= .
+        { rv = NULL; }
+opt_identifier(rv) ::= IDENTIFIER(id).
+        { rv = id->v_symbol; id->v_symbol = NULL; }
 
 enumerator_list(rv) ::= enumerator(e).
         { e->next = NULL; rv.first = rv.last = e; e = NULL; }
@@ -831,7 +1773,10 @@ enumerator_list(rv) ::= enumerator_list(a) COMMA enumerator(e).
           else
             a.last->next = e;
           a.last = e;
-          e.next = NULL; }
+          e.next = NULL;
+          
+          rv = a;
+          a.first = a.last = NULL; }
 
 // an enumeration value, with value either implicit (assigned automatically)
 // or explicit (derived from a constant expression).
@@ -877,16 +1822,18 @@ direct_declarator(decl) ::= LPAREN declarator(in) RPAREN.
 direct_declarator(decl) ::= direct_declarator(in) LBRACKET opt_type_qualifier_list(tq) RBRACKET.
         { decl = in; dbcc_declarator_append_array (decl, tq, NULL); in = NULL; }
 
-direct_declarator(decl) ::= direct_declarator(in) LBRACKET opt_static(os1) opt_type_qualifier_list(tq) opt_static(os2) assignment_expression(index_expr) RBRACKET.
-        { if (os1 && os2)
-            {
-              ...     //error static must only appear once
-            }
-          if (os1 || os2)
-            {
-              ...     //index_expr must be constant!
-            }
-          decl = in;
+direct_declarator(decl) ::= direct_declarator(in) LBRACKET STATIC opt_type_qualifier_list(tq) assignment_expression(index_expr) RBRACKET.
+        { decl = in;
+          dbcc_declarator_append_array (decl, tq, index_expr);
+          in = NULL;
+        }
+direct_declarator(decl) ::= direct_declarator(in) LBRACKET type_qualifier_list(tq) STATIC assignment_expression(index_expr) RBRACKET.
+        { decl = in;
+          dbcc_declarator_append_array (decl, tq, index_expr);
+          in = NULL;
+        }
+direct_declarator(decl) ::= direct_declarator(in) LBRACKET opt_type_qualifier_list(tq) assignment_expression(index_expr) RBRACKET.
+        { decl = in;
           dbcc_declarator_append_array (decl, tq, index_expr);
           in = NULL;
         }
@@ -909,23 +1856,15 @@ direct_declarator(decl) ::= direct_declarator(in) LPAREN identifier_list(idlist)
         { decl = in;
           in = NULL;
           unsigned n_symbols = 0;
-          for (DBCC_P_IdentifierList *at = idlist.first; at; at = at->next)
+          for (P_IdentifierList *at = idlist.first; at; at = at->next)
             n_symbols++;
           unsigned i = 0;
           symbols = malloc (sizeof (DBCC_Symbol *) * n_symbols);
-          for (DBCC_P_IdentifierList *at = idlist.first; at; at = at->next)
+          for (P_IdentifierList *at = idlist.first; at; at = at->next)
             symbols[i++] = at->symbol;
           dbcc_declarator_append_function_kr (decl, n_symbols, symbols);
         }
 
-opt_identifier(rv) ::= IDENTIFIER(id).
-        { rv = id.v_symbol; id.v_symbol = NULL; }
-opt_identifier(rv) ::= .
-        { rv = NULL; }
-opt_static(rv) ::= .
-        { rv = false; }
-opt_static(rv) ::= STATIC.
-        { rv = true; }
 opt_comma ::= .
 opt_comma ::= COMMA.
 
@@ -974,11 +1913,21 @@ parameter_list(rv) ::= parameter_list(a) COMMA parameter_declaration(decl).
           decl = NULL; }
 
 parameter_declaration(rv) ::= declaration_specifiers(type) declarator(name).
-        { ... }
-parameter_declaration(rv) ::= declaration_specifiers abstract_declarator.
-        { ... }
-parameter_declaration(rv) ::= declaration_specifiers.
-        { ... }
+        { rv = p_declaration_new ();
+          p_declaration_add_declaration_specifiers(rv, type);
+          p_declaration_add_declarator(rv, name);
+          type = NULL;
+          name = NULL; }
+parameter_declaration(rv) ::= declaration_specifiers(type) abstract_declarator(nonname).
+        { rv = p_declaration_new ();
+          p_declaration_add_declaration_specifiers(rv, type);
+          p_declaration_add_declarator(rv, nonname);
+          type = NULL;
+          nonname = NULL; }
+parameter_declaration(rv) ::= declaration_specifiers(type).
+        { rv = p_declaration_new ();
+          p_declaration_add_declaration_specifiers(rv, type);
+          type = NULL; }
 
 opt_parameter_type_list(rv) ::= parameter_type_list(list).
         { rv = list; list = NULL; }
@@ -992,8 +1941,10 @@ identifier_list(rv) ::= identifier_list(a) COMMA IDENTIFIER(id).
         { rv = a; a.first = a.last = NULL;
           dbcc_p_identifier_list_append (&rv, id->info.v_symbol); }
 
-type_name ::= specifier_qualifier_list abstract_declarator.
-type_name ::= specifier_qualifier_list.
+type_name(type) ::= specifier_qualifier_list(q) abstract_declarator(d).
+        { type = type_from_parts (context, q, d); }
+type_name(type) ::= specifier_qualifier_list(q).
+        { type = type_from_parts (context, q, NULL); }
 
 abstract_declarator(rv) ::= ASTERISK opt_type_qualifier_list(tq) abstract_declarator(d).
         { rv = dbcc_declarator_new_pointer (tq, d);
@@ -1097,7 +2048,8 @@ designator(rv) ::= DOT IDENTIFIER(id).
           index = NULL; }
 
 static_assert_declaration(decl) ::= STATIC_ASSERT LPAREN constant_expression(expr) COMMA STRING_LITERAL(explanation) RPAREN SEMICOLON.
-	{ ... }
+	{ decl = P_static_assertion_new (expr, explanation->v_string);
+          explanation->v_string.str = NULL; }
 
 statement(rv) ::= labeled_statement(stmt).
         { rv = stmt; stmt = NULL; }
@@ -1141,7 +2093,9 @@ block_item_list(rv) ::= block_item(bi).
         { rv.first = rv.last = bi;
           bi->next = NULL; }
 block_item_list(rv) ::= block_item_list(in) block_item(bi).
-        { rv.last->next = bi;
+        { rv = in;
+          in.first = in.last = NULL;
+          rv.last->next = bi;
           rv.last = bi;
           bi->next = NULL; }
 
@@ -1222,15 +2176,31 @@ external_declaration(rv) ::= declaration(d).
 
 // an DBCC_Declaration, even though it doesn't fit the mould too well
 function_definition(fdef) ::= declaration_specifiers(decl_specs) declarator(decl) opt_declaration_list(kr) compound_statement(body).
-        { ... 
-          fdef = p_declaration_new_function_definition (...);
+        { fdef = decl_specs;
+          p_declaration_append_declarator(fdef, decl);
+          decl_specs = NULL;
+          if (kr.declaration_list.first != NULL)
+            {
+              ... function must have identifier-list (not declarator list)
+              ... names must match
+              ... convert function arg-list into declration_list
+            }
+          assert(fdef->body_expr == NULL);
+          assert(body != NULL);
+          fdef->body_expr = body;
+          decl_specs = NULL;
+          decl = NULL;
+          // let kr be freed
+          body = NULL;
         }
 
 // only used for k+r function definitions
 declaration_list(x) ::= declaration(d).
         { d->next = NULL; x.first = x.last = d; }
 declaration_list(rv) ::= declaration_list(in) declaration(d).
-        { x.last->next = d; x.last = d; d->next = NULL; }
+        { rv = in;
+          in.first = in.last = NULL;
+          rv.last->next = d; rv.last = d; d->next = NULL; }
 
 opt_declaration_list(rv) ::= .
         { rv.first = rv.last = NULL; }

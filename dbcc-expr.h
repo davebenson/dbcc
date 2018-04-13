@@ -1,117 +1,169 @@
+#ifndef __DBCC_EXPR_H_
+#define __DBCC_EXPR_H_
+
+typedef union DBCC_Expr DBCC_Expr;
+
+typedef struct DBCC_Expr_Base DBCC_Expr_Base;
+typedef struct DBCC_BinaryOperatorExpr DBCC_BinaryOperatorExpr;
+typedef struct DBCC_UnaryOperatorExpr DBCC_UnaryOperatorExpr;
+typedef struct DBCC_SubscriptExpr DBCC_SubscriptExpr;
+typedef struct DBCC_DereferenceExpr DBCC_DereferenceExpr;
+typedef struct DBCC_VariableExpr DBCC_VariableExpr;
+typedef struct DBCC_StructuredInitializerPiece DBCC_StructuredInitializerPiece;
+typedef struct DBCC_StructuredInitializer DBCC_StructuredInitializer;
+typedef struct DBCC_StructuredInitializerExpr DBCC_StructuredInitializerExpr;
 
 typedef enum
 {
-  DBCC_EXPR_UNARY_OP,
-  DBCC_EXPR_BINARY_OP,
-  DBCC_EXPR_TERNARY_OP,
-  DBCC_EXPR_CONSTANT,
-  DBCC_EXPR_SUBSCRIPT,
-  DBCC_EXPR_DEREFERENCE,
-  DBCC_EXPR_REFERENCE,
-} DBCC_ExprType;
+  DBCC_EXPR_TYPE_UNARY_OP,
+  DBCC_EXPR_TYPE_BINARY_OP,
+  DBCC_EXPR_TYPE_TERNARY_OP,
+  DBCC_EXPR_TYPE_CONSTANT,
+  DBCC_EXPR_TYPE_SUBSCRIPT,
+  DBCC_EXPR_TYPE_DEREFERENCE,
+  DBCC_EXPR_TYPE_REFERENCE,
+} DBCC_Expr_Type;
 
 struct DBCC_Expr_Base
 {
-  DBCC_ExprType type;
+  DBCC_Expr_Type type;
+  DBCC_Type *value_type;
+  void *constant_value;
+  DBCC_CodePosition *code_position;
 };
 
-struct DBCC_Expr_Constant
-{
-  DBCC_Expr_Base base;
-  uint8_t value[8];
-};
-
-struct DBCC_Expr_BinaryOperator
+struct DBCC_BinaryOperatorExpr
 {
   DBCC_Expr_Base base;
   DBCC_BinaryOperator op;
   DBCC_Expr *a, *b;
 };
 
-struct DBCC_Expr_UnaryOperator
+struct DBCC_UnaryOperatorExpr
 {
   DBCC_Expr_Base base;
   DBCC_BinaryOperator op;
   DBCC_Expr *a;
 };
 
-struct DBCC_Expr_Subscript
+struct DBCC_SubscriptExpr
 {
   DBCC_Expr_Base base;
   DBCC_Expr *ptr;
   DBCC_Expr *index;
 };
 
-struct DBCC_Expr_Dereference
+struct DBCC_DereferenceExpr
 {
   DBCC_Expr_Base base;
   DBCC_Expr *ptr;
 };
 
-struct DBCC_Expr_Variable
+struct DBCC_VariableExpr
 {
   DBCC_Expr_Base base;
   DBCC_Symbol name;
 };
 
-struct DBCC_Statement
+union DBCC_Expr
 {
-  DBCC_StatementType type;
-  DBCC_Statement *prev, *next;
-  DBCC_Statement *parent;
+  DBCC_Expr_Type expr_type;
+  DBCC_Expr_Base base;
+  DBCC_DereferenceExpr v_dereference;
 };
 
-struct DBCC_CompoundStatement
+typedef struct DBCC_GenericAssociation DBCC_GenericAssociation;
+struct DBCC_GenericAssociation
 {
-  DBCC_Statement base;
-  DBCC_Statement *first_statements;
-  DBCC_Statement *last_statements;
+  DBCC_Type *type;
+  DBCC_Expr *expr;
 };
 
-struct DBCC_ForStatement
+DBCC_Expr *dbcc_expr_new_alignof_type     (DBCC_Type          *type);
+DBCC_Expr *dbcc_expr_new_binary_operator  (DBCC_BinaryOperator op,
+                                           DBCC_Expr          *a,
+                                           DBCC_Expr          *b);
+DBCC_Expr *dbcc_expr_new_inplace_binary   (DBCC_InplaceBinaryOperator op,
+                                           DBCC_Expr          *in_out,
+                                           DBCC_Expr          *b);
+DBCC_Expr *dbcc_expr_new_call             (DBCC_Expr          *head,
+                                           unsigned            n_args,
+                                           DBCC_Expr         **args);
+DBCC_Expr *dbcc_expr_new_cast             (DBCC_Type          *type,
+                                           DBCC_Expr          *value);
+DBCC_Expr *dbcc_expr_new_generic_selection(DBCC_Expr          *expr,
+                                           size_t              n_associations,
+                                           DBCC_GenericAssociation *associations,
+                                           DBCC_Expr          *default_expr);
+DBCC_Expr *dbcc_expr_new_inplace_unary    (DBCC_InplaceUnaryOperator  op,
+                                           DBCC_Expr          *in_out);
+DBCC_Expr *dbcc_expr_new_member_access    (DBCC_Expr          *expr,
+                                           DBCC_Symbol        *name);
+DBCC_Expr *dbcc_expr_new_pointer_access   (DBCC_Expr          *expr,
+                                           DBCC_Symbol        *name);
+DBCC_Expr *dbcc_expr_new_sizeof_expr      (DBCC_Expr          *expr);
+DBCC_Expr *dbcc_expr_new_sizeof_type      (DBCC_Type          *type);
+DBCC_Expr *dbcc_expr_new_subscript        (DBCC_Expr          *object,
+                                           DBCC_Expr          *subscript);
+DBCC_Expr *dbcc_expr_new_symbol           (DBCC_Symbol        *symbol);
+DBCC_Expr *dbcc_expr_new_int_constant     (const char         *str,
+                                           DBCC_Error        **error);
+DBCC_Expr *dbcc_expr_new_string_constant  (DBCC_String        *constant);
+DBCC_Expr *dbcc_expr_new_enum_constant    (DBCC_EnumValue     *enum_value);
+DBCC_Expr *dbcc_expr_new_float_constant   (const char         *str,
+                                           DBCC_Error        **error);
+DBCC_Expr *dbcc_expr_new_unary            (DBCC_UnaryOperator  op,
+                                           DBCC_Expr          *a);
+
+typedef enum
 {
-  DBCC_Statement base;
-  DBCC_Statement *init, *next, *body;
-  DBCC_Expr *condition;
+  DBCC_DESIGNATOR_MEMBER,
+  DBCC_DESIGNATOR_INDEX,
+} DBCC_DesignatorType;
+
+typedef struct DBCC_Designator DBCC_Designator;
+struct DBCC_Designator
+{
+  DBCC_DesignatorType type;
+  union {
+    DBCC_Symbol *v_member;
+    DBCC_Expr *v_index;
+  };
 };
-struct DBCC_WhileStatement
-{
-  DBCC_Statement base;
-  DBCC_Expr *condition;
-  DBCC_Statement *body;
+struct DBCC_StructuredInitializer {
+  unsigned n_pieces;               // may be 0
+  DBCC_StructuredInitializerPiece *pieces;
 };
-struct DBCC_DoWhileStatement
-{
-  DBCC_Statement base;
-  DBCC_Statement *body;
-  DBCC_Expr *condition;
+struct DBCC_StructuredInitializerPiece {
+  unsigned n_designators;               // may be 0
+  DBCC_Designator *designators;
+  bool is_expr;
+  union {
+    DBCC_Expr *v_expr;
+    DBCC_StructuredInitializer v_structured_initializer;
+  };
 };
-struct DBCC_SwitchStatement
+struct DBCC_StructuredInitializerExpr
 {
-  DBCC_Statement base;
-  DBCC_Statement *body;
-  DBCC_Expr *condition;
-};
-struct DBCC_IfStatement
-{
-  DBCC_Statement base;
-  DBCC_Expr *condition;
-  DBCC_Statement *body;
-  DBCC_Statement *else_clause;
+  DBCC_Expr_Base base;
+  DBCC_StructuredInitializer initializer;
 };
 
-struct DBCC_GotoStatement
-{
-  DBCC_Statement base;
-  DBCC_Expr *condition;
-  DBCC_Statement *body;
-  DBCC_Statement *else_clause;
-};
+DBCC_Expr *dbcc_expr_new_structured_initializer
+                                          (DBCC_Type          *type,
+                                           DBCC_StructuredInitializer *init);
 
-struct DBCC_LabelStatement
+struct DBCC_TernaryExpr
 {
-  DBCC_Statement base;
-  DBCC_Expr *condition;
-  DBCC_Statement *body;
-  DBCC_Statement *else_clause;
+  DBCC_Expr_Base base;
+  DBCC_Expr *cond;
+  DBCC_Expr *a;
+  DBCC_Expr *b;
 };
+DBCC_Expr *dbcc_expr_new_ternary (DBCC_Expr *cond,
+                                  DBCC_Expr *a,
+                                  DBCC_Expr *b);
+
+void dbcc_expr_destroy (DBCC_Expr *expr);
+
+#endif

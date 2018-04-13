@@ -1,9 +1,22 @@
 
+typedef struct DBCC_GlobalNamespace DBCC_GlobalNamespace;
+
+#include <stdint.h>
+#include <stdbool.h>
+#include <string.h>
+#include "dbcc-symbol.h"
+#include "dbcc-code-position.h"
+#include "dbcc-error.h"
+#include "dbcc-ptr-table.h"
+
 typedef enum
 {
-  DBCC_UNARY_OPERATOR_MOVE,
-  DBCC_UNARY_OPERATOR_NOT,
-  DBCC_UNARY_OPERATOR_NEG,
+  DBCC_UNARY_OPERATOR_NOOP,
+  DBCC_UNARY_OPERATOR_LOGICAL_NOT,
+  DBCC_UNARY_OPERATOR_BITWISE_NOT,
+  DBCC_UNARY_OPERATOR_NEGATE,
+  DBCC_UNARY_OPERATOR_REFERENCE,
+  DBCC_UNARY_OPERATOR_DEREFERENCE,
 } DBCC_UnaryOperator;
 
 typedef enum
@@ -12,16 +25,21 @@ typedef enum
   DBCC_BINARY_OPERATOR_SUB,
   DBCC_BINARY_OPERATOR_MUL,
   DBCC_BINARY_OPERATOR_DIV,
-  DBCC_BINARY_OPERATOR_UNSIGNED_LT,
-  DBCC_BINARY_OPERATOR_UNSIGNED_LTEQ,
-  DBCC_BINARY_OPERATOR_UNSIGNED_GT,
-  DBCC_BINARY_OPERATOR_UNSIGNED_GTEQ,
-  DBCC_BINARY_OPERATOR_SIGNED_LT,
-  DBCC_BINARY_OPERATOR_SIGNED_LTEQ,
-  DBCC_BINARY_OPERATOR_SIGNED_GT,
-  DBCC_BINARY_OPERATOR_SIGNED_GTEQ,
+  DBCC_BINARY_OPERATOR_REMAINDER,
+  DBCC_BINARY_OPERATOR_LT,
+  DBCC_BINARY_OPERATOR_LTEQ,
+  DBCC_BINARY_OPERATOR_GT,
+  DBCC_BINARY_OPERATOR_GTEQ,
   DBCC_BINARY_OPERATOR_EQ,
   DBCC_BINARY_OPERATOR_NE,
+  DBCC_BINARY_OPERATOR_SHIFT_LEFT,
+  DBCC_BINARY_OPERATOR_SHIFT_RIGHT,
+  DBCC_BINARY_OPERATOR_LOGICAL_AND,
+  DBCC_BINARY_OPERATOR_LOGICAL_OR,
+  DBCC_BINARY_OPERATOR_BITWISE_AND,
+  DBCC_BINARY_OPERATOR_BITWISE_OR,
+  DBCC_BINARY_OPERATOR_BITWISE_XOR,
+  DBCC_BINARY_OPERATOR_COMMA
 } DBCC_BinaryOperator;
 
 
@@ -56,11 +74,25 @@ typedef enum
   DBCC_TYPE_QUALIFIER_ATOMIC = (1<<3),
 } DBCC_TypeQualifier;
 
+typedef enum
+{
+  DBCC_STORAGE_CLASS_SPECIFIER_TYPEDEF       = (1<<0),
+  DBCC_STORAGE_CLASS_SPECIFIER_EXTERN        = (1<<1),
+  DBCC_STORAGE_CLASS_SPECIFIER_STATIC        = (1<<2),
+  DBCC_STORAGE_CLASS_SPECIFIER_THREAD_LOCAL  = (1<<3),
+  DBCC_STORAGE_CLASS_SPECIFIER_AUTO          = (1<<4),
+  DBCC_STORAGE_CLASS_SPECIFIER_REGISTER      = (1<<5),
+} DBCC_StorageClassSpecifier;
 
+typedef enum
+{
+  DBCC_FUNCTION_SPECIFIER_NORETURN           = (1<<0),
+  DBCC_FUNCTION_SPECIFIER_INLINE             = (1<<1),
+} DBCC_FunctionSpecifiers;
 typedef struct
 {
   int value;
-  DBCC_Symbol name;
+  DBCC_Symbol* name;
 } DBCC_EnumValue;
 
 typedef struct DBCC_String DBCC_String;
@@ -69,6 +101,17 @@ struct DBCC_String
   size_t length;
   char *str;
 };
+DBCC_INLINE void dbcc_string_clear (DBCC_String *clear)
+{
+  if (clear->str)
+    free (clear->str);
+  *clear = (DBCC_String){0, NULL};
+}
+
+#include "dbcc-type.h"
+#include "dbcc-expr.h"
+#include "dbcc-statement.h"
+#include "dbcc-global-namespace.h"
 
 // The C Grammar we use defines a Declaration as a tricky beast with a list of "Declarators",
 // which are intended to generally handle reasonable cases like:
@@ -83,5 +126,9 @@ struct DBCC_String
 //       int (*z)(void*) = free;
 struct DBCC_Declaration
 {
-...
+  DBCC_Type *type;
+  DBCC_Symbol *name;
+  DBCC_Expr *init;              /* optional */
 };
+
+
