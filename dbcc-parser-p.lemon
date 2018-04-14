@@ -88,7 +88,6 @@ ABOUT THE DIFFERENCES BETWEEN THE PARSING TYPES AND THE FINAL TYPES:
 #include <string.h>
 #include <assert.h>
 #include "dbcc.h"
-#include "dbcc-expr.h"
 
 typedef struct P_Token P_Token;
 struct P_Token
@@ -113,6 +112,8 @@ struct P_Token
   DBCC_Type *type;
 };
 
+typedef struct P_Context P_Context;
+
 typedef struct P_DeclaratorList P_DeclaratorList;
 typedef struct P_DeclarationList P_DeclarationList;
 typedef struct P_ParameterList P_ParameterList;
@@ -128,19 +129,41 @@ typedef struct P_InitializerList P_InitializerList;
 typedef struct P_GenericAssociationList P_GenericAssociationList;
 typedef struct P_GenericAssociation P_GenericAssociation;
 
-typedef struct
+#define FAIL()                       \
+  do{                                \
+    assert(context->error != NULL);  \
+    return;                          \
+  }while(0)
+
+/* Forward declarations of various internal functions */
+static bool declaration_list_to_params (P_Context *context, 
+                                        P_DeclarationList *list,
+                                        size_t *n_params_out,
+                                        DBCC_Param **params_out);
+static void p_declaration_list_clear (P_DeclarationList *list);
+
+struct P_Context
 {
   DBCC_Error *error;
   DBCC_Namespace *globals;
-} P_Context;
+  DBCC_Namespace *locals;
+  int next_enum_value;
+};
+#define P_CONTEXT_NAMESPACE(context) \
+        ((context)->locals ? (context)->locals : (context)->globals)
 
+typedef struct 
+{
+  unsigned n_ptr;
+  DBCC_TypeQualifier *ptr_type_qualifiers;
+} P_Pointer;
 static bool
 p_context_lookup (P_Context *context,
                   DBCC_Symbol *symbol,
                   DBCC_CodePosition *cp,
                   DBCC_NamespaceEntry *entry)
 {
-  if (!dbcc_namespace_lookup (context->globals, symbol, entry))
+  if (!dbcc_namespace_lookup (P_CONTEXT_NAMESPACE(context), symbol, entry))
     {
       context->error = dbcc_error_new (DBCC_ERROR_NOT_FOUND,
                                        "symbol '%s' not found",
@@ -152,13 +175,42 @@ p_context_lookup (P_Context *context,
   return true;
 }
 
+static DBCC_Type *
+context_new_struct_or_union_stub (P_Context         *context,
+                                  bool               is_struct,
+                                  DBCC_Symbol       *tag,
+                                  DBCC_CodePosition *cp)
+{
+  ...
+}
+
+static DBCC_Type *
+context_new_struct_or_union      (P_Context         *context,
+                                  bool               is_struct,
+                                  DBCC_Symbol       *tag,
+                                  DBCC_CodePosition *cp,
+                                  size_t             n_params,
+                                  DBCC_Param        *params)
+{
+  ...
+}
+
 static P_Context *
 p_context_new (DBCC_Namespace *ns)
 {
   P_Context *rv = malloc (sizeof (P_Context));
   rv->error = NULL;
   rv->globals = ns;
+  rv->locals = NULL;
   return rv;
+}
+
+static void
+p_context_add_enum_value (P_Context *context,
+                          DBCC_EnumValue *enum_value)
+{
+  DBCC_Namespace *ns = context->locals ? context->locals : context->globals;
+  dbcc_namespace_add_enum_value (ns, enum_value);
 }
 
 struct P_DesignatorList
@@ -229,34 +281,26 @@ static void p_initializer_list_clear(P_InitializerList *list)
   list->last = NULL;
 }
 
-typedef struct P_Enumerator P_Enumerator;
-typedef struct P_EnumeratorList P_EnumeratorList;
-struct P_EnumeratorList
+typedef struct P_EnumValueNode P_EnumValueNode;
+typedef struct P_EnumValueList P_EnumValueList;
+struct P_EnumValueList
 {
-  P_Enumerator *first, *last;
+  P_EnumValueNode *first, *last;
 };
 
-struct P_Enumerator
+struct P_EnumValueNode
 {
-  P_Enumerator *next;
-  DBCC_Symbol *name;
-  DBCC_Expr *value;             // optional
+  P_EnumValueNode *next;
+  DBCC_EnumValue *enum_value;
 };
 static void
-p_enumerator_destroy (P_Enumerator *e)
-{
-  if (e->value != NULL)
-    dbcc_expr_destroy(e->value);
-  free(e);
-}
-static void
-p_enumerator_list_clear (P_EnumeratorList *list)
+p_enumerator_list_clear (P_EnumValueList *list)
 {
   while (list->first != NULL)
     {
-      P_Enumerator *kill = list->first;
+      P_EnumValueNode *kill = list->first;
       list->first = kill->next;
-      p_enumerator_destroy (kill);
+      free (kill);
     }
   list->last = NULL;
 }
@@ -284,6 +328,18 @@ p_identifier_list_clear (P_IdentifierList *list)
       p_identifier_node_destroy (kill);
     }
   list->last = NULL;
+}
+static void
+p_identifier_list_append (P_IdentifierList *list, DBCC_Symbol *identifier)
+{
+  P_IdentifierNode *node = malloc (sizeof (P_IdentifierNode));
+  if (list->first)
+    list->last->next = node;
+  else
+    list->first = node;
+  list->last = node;
+  node->identifier = identifier;
+  node->next = NULL;
 }
 
 
@@ -328,6 +384,12 @@ struct P_DeclarationList
   P_Declaration *first_declaration;
   P_Declaration *last_declaration;
 };
+
+struct P_ParameterList
+{
+  P_DeclarationList parameters;
+  bool has_varargs;
+};
 struct P_DeclaratorList
 {
   P_Declarator *first_declarator;
@@ -346,6 +408,10 @@ typedef enum
   P_DECLARATOR_TYPE_POINTER,
   P_DECLARATOR_TYPE_ARRAY,
   P_DECLARATOR_TYPE_VARLEN_ARRAY,
+  P_DECLARATOR_TYPE_BITFIELD,
+  P_DECLARATOR_TYPE_FUNCTION,
+  P_DECLARATOR_TYPE_KR_FUNCTION,
+  P_DECLARATOR_TYPE_PARENTHESIZED       // usually ignored; distinguishes return-value and name in function-type declarators
 } P_DeclaratorType;
 
 struct P_Declarator
@@ -364,8 +430,24 @@ struct P_Declarator
       DBCC_Expr *size;
     } v_array;
     struct {
+      DBCC_TypeQualifier qualifiers;
       P_Declarator *child;
     } v_varlen_array;
+    struct {
+      P_Declarator *child;
+      DBCC_Expr *bit_width;
+    } v_bitfield;
+    struct {
+      P_Declarator *child;
+      P_ParameterList parameters;
+    } v_function;
+    struct {
+      P_Declarator *child;
+      P_IdentifierList parameters;
+    } v_kr_function;
+    struct {
+      P_Declarator *child;
+    } v_parenthesized;
   };
   P_Initializer *initializer;
 };
@@ -597,19 +679,17 @@ count_index_to_keyword (unsigned i)
 typedef struct
 {
   uint8_t counts[N_TYPE_SPECIFIER_KEYWORDS];
+  DBCC_Symbol *symbol;
   DBCC_Symbol *id;              // for named structs, unions, enums
   bool is_stub;                 // for forward-declared structs+unions+enums
-  unsigned n_elements;          // for structs,unions,enums
-  union {
-    P_EnumeratorList v_enumerator_list;
-    P_DeclarationList v_declaration_list;
-  };
-  DBCC_Type *atomic_type;
-  DBCC_Type *typedef_type;
+
+  // for enum, atomic, typedef, struct, union: this is the actual (un-qualified) tyype)
+  DBCC_Type *type;              
 } P_TypeSpecifiers;
+
 #define P_TYPE_SPECIFIERS_INIT \
     (P_TypeSpecifiers) \
-        {{0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},NULL,false,0,{{NULL,NULL}},NULL,NULL}
+        {{0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},NULL,NULL,false,NULL}
 
 static bool
 p_type_specifiers_combine (P_Context *context,
@@ -647,32 +727,38 @@ p_type_specifiers_combine (P_Context *context,
   return true;
 }
 
-static void
-p_type_specifiers_init_struct (P_TypeSpecifiers  *to_init,
-                               DBCC_Symbol       *opt_symbol,
+static bool
+p_type_specifiers_init_struct_or_union
+                              (P_TypeSpecifiers  *to_init,
+                               P_Context         *context,
+                               bool               is_struct,   // else union
+                               DBCC_Symbol       *opt_tag,
                                P_DeclarationList *declaration_list)
 {
   P_TypeSpecifiers rv = P_TYPE_SPECIFIERS_INIT;
-  rv.symbol = opt_symbol;
-  if (declaration_list != NULL)
-    {
-      ... to_init->... = ...
-    }
+  rv.symbol = opt_tag;
+  rv.counts[P_TYPE_SPECIFIERS_INDEX_STRUCT] = 1;
+  
+  size_t n_params;
+  DBCC_Param *params;
+
+  if (!declaration_list_to_params (context, declaration_list, &n_params, &params))
+    return false;
+
+  if (is_struct)
+    to_init->type = dbcc_type_new_struct (opt_tag, n_params, params, &context->error);
+  else
+    to_init->type = dbcc_type_new_union (opt_tag, n_params, params, &context->error);
+
+  return to_init->type != NULL;
 }
 
-static void p_declaration_list_clear (P_DeclarationList *list);
 static void
 p_type_specifiers_clear (P_TypeSpecifiers *ts)
 {
-  if (ts->counts[P_TYPE_SPECIFIERS_INDEX_ENUM] != 0)
-    {
-      p_enumerator_list_clear (&ts->v_enumerator_list);
-    }
-  else if (ts->counts[P_TYPE_SPECIFIERS_INDEX_STRUCT] != 0
-   ||      ts->counts[P_TYPE_SPECIFIERS_INDEX_UNION] != 0)
-    {
-      p_declaration_list_clear (&ts->v_declaration_list);
-    }
+  (void) ts;
+  //if (ts->type != NULL)
+    //dbcc_type_unref (ts->type);
 }
 
 struct P_Declaration
@@ -739,6 +825,19 @@ p_declarator_new_array   (DBCC_TypeQualifier qualifiers,
 }
 
 static P_Declarator *
+p_declarator_new_varlen_array   (DBCC_TypeQualifier qualifiers,
+                                 P_Declarator *child)
+{
+  P_Declarator *rv = malloc (sizeof(P_Declarator));
+  rv->declarator_type = P_DECLARATOR_TYPE_VARLEN_ARRAY;
+  rv->prev = rv->next = NULL;
+  rv->v_varlen_array.qualifiers = qualifiers;
+  rv->v_varlen_array.child = child;
+  rv->initializer = NULL;
+  return rv;
+}
+
+static P_Declarator *
 p_declarator_new_name    (DBCC_Symbol  *symbol)
 {
   P_Declarator *rv = malloc (sizeof(P_Declarator));
@@ -748,6 +847,60 @@ p_declarator_new_name    (DBCC_Symbol  *symbol)
   rv->initializer = NULL;
   return rv;
 }
+
+static P_Declarator *
+p_declarator_new_bitfield    (P_Declarator *child,
+                              DBCC_Expr    *bit_width)
+{
+  P_Declarator *rv = malloc (sizeof(P_Declarator));
+  rv->declarator_type = P_DECLARATOR_TYPE_BITFIELD;
+  rv->next = NULL;
+  rv->v_bitfield.bit_width = bit_width;
+  rv->v_bitfield.child = child;
+  rv->initializer = NULL;
+  return rv;
+}
+
+static P_Declarator *
+p_declarator_new_function    (P_Declarator *child,
+                              P_ParameterList *args)
+{
+  P_Declarator *rv = malloc (sizeof(P_Declarator));
+  rv->declarator_type = P_DECLARATOR_TYPE_FUNCTION;
+  rv->next = NULL;
+  if (args != NULL)
+    rv->v_function.parameters = *args;
+  else
+    {
+      rv->v_function.parameters.parameters.first_declaration = NULL;
+      rv->v_function.parameters.parameters.last_declaration = NULL;
+      rv->v_function.parameters.has_varargs = false;
+    }
+  rv->v_function.child = child;
+  rv->initializer = NULL;
+  return rv;
+}
+static P_Declarator *
+p_declarator_new_function_kr (P_Declarator *child,
+                              P_IdentifierList *args)
+{
+  P_Declarator *rv = malloc (sizeof(P_Declarator));
+  rv->declarator_type = P_DECLARATOR_TYPE_KR_FUNCTION;
+  rv->next = NULL;
+  if (args != NULL)
+    {
+      rv->v_kr_function.parameters = *args;
+    }
+  else
+    {
+      rv->v_kr_function.parameters.first = NULL;
+      rv->v_kr_function.parameters.last = NULL;
+    }
+  rv->v_function.child = child;
+  rv->initializer = NULL;
+  return rv;
+}
+
 
 
 static void
@@ -827,12 +980,6 @@ p_declarator_list_clear (P_DeclaratorList *list)
     }
   list->last_declarator = NULL;
 }
-
-struct P_ParameterList
-{
-  P_DeclarationList parameters;
-  bool has_varargs;
-};
 static void
 p_parameter_list_clear (P_ParameterList *list)
 {
@@ -1038,7 +1185,331 @@ structured_initializer_from_p_initializer_list (P_InitializerList *list,
       i++;
     }
 }
+static DBCC_Type * type_from_parts (P_Context *context,
+                                    P_Declaration *declaration,
+                                    P_Declarator *declarator);
 
+static P_Declarator *
+declarator_find_parenthesized_part (P_Declarator *d)
+{
+  while (d != NULL)
+    {
+      switch (d->declarator_type)
+      {
+      case P_DECLARATOR_TYPE_NAME:
+        return NULL;
+      case P_DECLARATOR_TYPE_POINTER:
+        d = d->v_pointer.target;
+        break;
+      case P_DECLARATOR_TYPE_ARRAY:
+        d = d->v_array.child;
+        break;
+      case P_DECLARATOR_TYPE_VARLEN_ARRAY:
+        d = d->v_varlen_array.child;
+        break;
+      case P_DECLARATOR_TYPE_BITFIELD:
+        d = d->v_bitfield.child;
+        break;
+      case P_DECLARATOR_TYPE_FUNCTION:
+        d = d->v_function.child;
+        break;
+      case P_DECLARATOR_TYPE_KR_FUNCTION:
+        d = d->v_kr_function.child;
+        break;
+      case P_DECLARATOR_TYPE_PARENTHESIZED:
+        return d;
+      }
+    }
+  return NULL;
+}
+static DBCC_Symbol *
+name_from_declarator (P_Declarator *d)
+{
+  while (d != NULL)
+    {
+      switch (d->declarator_type)
+      {
+      case P_DECLARATOR_TYPE_NAME:
+        return d->v_name;
+      case P_DECLARATOR_TYPE_POINTER:
+        d = d->v_pointer.target;
+        break;
+      case P_DECLARATOR_TYPE_ARRAY:
+        d = d->v_array.child;
+        break;
+      case P_DECLARATOR_TYPE_VARLEN_ARRAY:
+        d = d->v_varlen_array.child;
+        break;
+      case P_DECLARATOR_TYPE_BITFIELD:
+        d = d->v_bitfield.child;
+        break;
+      case P_DECLARATOR_TYPE_FUNCTION:
+        d = d->v_function.child;
+        break;
+      case P_DECLARATOR_TYPE_KR_FUNCTION:
+        d = d->v_kr_function.child;
+        break;
+      case P_DECLARATOR_TYPE_PARENTHESIZED:
+        d = d->v_parenthesized.child;
+        break;
+      }
+    }
+  return NULL;
+}
+
+static DBCC_Type *
+declarator_modify_type (P_Context *context, 
+                        DBCC_Type *base_type,
+                        P_Declarator *declarator,
+                        bool          stop_at_parens)
+{
+  if (declarator == NULL)
+    return base_type;
+  switch (declarator->declarator_type)
+    {
+    case P_DECLARATOR_TYPE_NAME:
+      return base_type;
+    case P_DECLARATOR_TYPE_POINTER:
+      return dbcc_type_new_pointer (base_type, declarator->v_pointer.qualifiers);
+    case P_DECLARATOR_TYPE_ARRAY:
+      {
+        size_t count = 0;
+        DBCC_Expr *size_expr = declarator->v_array.size;
+        if (size_expr != NULL)
+          {
+            if (size_expr->base.constant_value == NULL)
+              {
+                context->error = dbcc_error_new (DBCC_ERROR_CONSTANT_REQUIRED,
+                                     "size of array must be indicated by a constant expression");
+                dbcc_error_add_code_position (context->error, size_expr->base.code_position);
+                return NULL;
+              }
+            if (!dbcc_cast_value (dbcc_namespace_get_sizet_type(context->globals), &count,
+                                  size_expr->base.value_type,
+                                  size_expr->base.constant_value))
+              {
+                context->error = dbcc_error_new (DBCC_ERROR_EXPECTED_INT,
+                                                 "bad expression type %s in array-size specifier",
+                                                 dbcc_symbol_get_string (size_expr->base.value_type->base.name));
+                return NULL;
+              }
+            return dbcc_type_new_array (declarator->v_array.qualifiers,
+                                        count,
+                                        base_type);
+          }
+      }
+    case P_DECLARATOR_TYPE_VARLEN_ARRAY:
+      return dbcc_type_new_varlen_array (declarator->v_varlen_array.qualifiers,
+                                         base_type);
+    case P_DECLARATOR_TYPE_BITFIELD:
+      {
+        DBCC_Expr *bw = declarator->v_bitfield.bit_width;
+        size_t width;
+        if (bw->base.constant_value == NULL)
+          {
+            context->error = dbcc_error_new (DBCC_ERROR_CONSTANT_REQUIRED,
+                                             "bitfield width must be a constant");
+            dbcc_error_add_code_position(context->error, bw->base.code_position);
+            return NULL;
+          }
+        if (!dbcc_cast_value (dbcc_namespace_get_sizet_type(context->globals), &width,
+                              bw->base.value_type, bw->base.constant_value))
+          {
+            context->error = dbcc_error_new (DBCC_ERROR_EXPECTED_INT,
+                                "bitfield width is not an integral type");
+            dbcc_error_add_code_position(context->error, bw->base.code_position);
+            return NULL;
+          }
+
+        // TODO: verify bitfield width is equal or smaller size of base_type
+        // (INCLUDE C11 SECTION REFERENCE)
+
+        return dbcc_type_new_bitfield (width, base_type);
+      }
+    case P_DECLARATOR_TYPE_PARENTHESIZED:
+      {
+        if (stop_at_parens)
+          return base_type;
+        else
+          return declarator_modify_type (context, base_type, declarator->v_parenthesized.child, false);
+      }
+    case P_DECLARATOR_TYPE_FUNCTION:
+      {
+        P_Declarator *child = declarator->v_function.child;
+        DBCC_Type *rettype = declarator_modify_type (context, base_type, child, true);
+        if (rettype == NULL)
+          return NULL;
+
+        P_ParameterList plist = declarator->v_function.parameters;
+        DBCC_Param *params;
+        size_t n_params;
+        if (!declaration_list_to_params (context, &plist.parameters, &n_params, &params))
+          return NULL;
+
+        DBCC_Type *fct = dbcc_type_new_function (rettype, n_params, params, plist.has_varargs);
+        P_Declarator *subdecl = declarator_find_parenthesized_part (child);
+        return declarator_modify_type (context, fct, subdecl, false);
+      }
+    case P_DECLARATOR_TYPE_KR_FUNCTION:
+      {
+        assert(0);              // TODO
+        return NULL;
+      }
+    }
+}
+
+static DBCC_Type *
+type_specifiers_to_type (P_Context *context,
+                         P_TypeSpecifiers *specs)
+{
+  if (specs->counts[P_TYPE_SPECIFIERS_INDEX_COMPLEX])
+    {
+      if (specs->counts[P_TYPE_SPECIFIERS_INDEX_FLOAT])
+        return dbcc_namespace_get_float_complex_type (context->globals);
+      if (specs->counts[P_TYPE_SPECIFIERS_INDEX_DOUBLE])
+        {
+          if (specs->counts[P_TYPE_SPECIFIERS_INDEX_LONG])
+            return dbcc_namespace_get_long_double_complex_type (context->globals);
+          else
+            return dbcc_namespace_get_double_complex_type (context->globals);
+        }
+      context->error = dbcc_error_new (DBCC_ERROR_NO_COMPLEX_VARIANT,
+                                       "complex type of given base-type not allowed");
+      return NULL;
+    }
+  else if (specs->counts[P_TYPE_SPECIFIERS_INDEX_IMAGINARY])
+    {
+      if (specs->counts[P_TYPE_SPECIFIERS_INDEX_FLOAT])
+        return dbcc_namespace_get_float_imaginary_type (context->globals);
+      if (specs->counts[P_TYPE_SPECIFIERS_INDEX_DOUBLE])
+        {
+          if (specs->counts[P_TYPE_SPECIFIERS_INDEX_LONG])
+            return dbcc_namespace_get_long_double_imaginary_type (context->globals);
+          else
+            return dbcc_namespace_get_double_imaginary_type (context->globals);
+        }
+      context->error = dbcc_error_new (DBCC_ERROR_NO_COMPLEX_VARIANT,
+                                       "imaginary type of given base-type not allowed");
+      return NULL;
+    }
+  if (specs->counts[P_TYPE_SPECIFIERS_INDEX_UNSIGNED])
+    {
+      if (specs->counts[P_TYPE_SPECIFIERS_INDEX_CHAR])
+        return dbcc_namespace_get_unsigned_short_type(context->globals);
+      if (specs->counts[P_TYPE_SPECIFIERS_INDEX_SHORT])
+        return dbcc_namespace_get_unsigned_short_type(context->globals);
+      if (specs->counts[P_TYPE_SPECIFIERS_INDEX_LONG] == 2)
+        return dbcc_namespace_get_unsigned_long_long_type(context->globals);
+      if (specs->counts[P_TYPE_SPECIFIERS_INDEX_LONG] == 1)
+        return dbcc_namespace_get_unsigned_long_type(context->globals);
+      return dbcc_namespace_get_unsigned_int_type(context->globals);
+    }
+  else
+    {
+      if (specs->counts[P_TYPE_SPECIFIERS_INDEX_CHAR])
+        {
+          if (specs->counts[P_TYPE_SPECIFIERS_INDEX_SIGNED])
+            return dbcc_namespace_get_signed_char_type(context->globals);
+          else
+            return dbcc_namespace_get_char_type(context->globals);
+        }
+      if (specs->counts[P_TYPE_SPECIFIERS_INDEX_SHORT])
+        return dbcc_namespace_get_short_type(context->globals);
+      if (specs->counts[P_TYPE_SPECIFIERS_INDEX_LONG] == 2)
+        return dbcc_namespace_get_long_long_type(context->globals);
+      if (specs->counts[P_TYPE_SPECIFIERS_INDEX_LONG] == 1)
+        return dbcc_namespace_get_long_type(context->globals);
+      if (specs->counts[P_TYPE_SPECIFIERS_INDEX_INT])
+        return dbcc_namespace_get_int_type(context->globals);
+    }
+  if (specs->counts[P_TYPE_SPECIFIERS_INDEX_FLOAT])
+    {
+      return dbcc_namespace_get_float_type (context->globals);
+    }
+  if (specs->counts[P_TYPE_SPECIFIERS_INDEX_DOUBLE])
+    {
+      if (specs->counts[P_TYPE_SPECIFIERS_INDEX_LONG])
+        return dbcc_namespace_get_long_double_type (context->globals);
+      else
+        return dbcc_namespace_get_double_type (context->globals);
+    }
+  if (specs->counts[P_TYPE_SPECIFIERS_INDEX_TYPEDEF]
+   || specs->counts[P_TYPE_SPECIFIERS_INDEX_ENUM]
+   || specs->counts[P_TYPE_SPECIFIERS_INDEX_STRUCT]
+   || specs->counts[P_TYPE_SPECIFIERS_INDEX_UNION]
+   || specs->counts[P_TYPE_SPECIFIERS_INDEX_ATOMIC])
+    return specs->type;
+
+  assert(0);
+  return NULL;
+}
+
+static DBCC_Type *
+type_from_parts (P_Context *context,
+                 P_Declaration *declaration,
+                 P_Declarator *declarator)
+{
+  DBCC_Type *type = type_specifiers_to_type(context, &declaration->v_declaration.specifiers);
+  if (type == NULL)
+    return NULL;
+  DBCC_TypeQualifier q = declaration->v_declaration.qualifiers;
+  if (q != 0)
+    type = dbcc_type_new_qualified (type, q);
+
+  // storage-class-specifiers and function-specifiers do not make new types
+
+  return declarator_modify_type (context, type, declarator, false);
+}
+
+#define ITERATE_DECLARATORS_OF_DECLARATION_LIST(list)               \
+    for (P_Declaration *declaration = (list)->first_declaration;      \
+         declaration != NULL;                                       \
+         declaration = declaration->next)                           \
+      for (P_Declarator *declarator = declaration->v_declaration.declarators.first_declarator;   \
+           declarator != NULL;                                     \
+           declarator = declarator->next)
+
+static size_t
+declaration_list_count_declarators (P_DeclarationList *list)
+{
+  size_t rv = 0;
+  ITERATE_DECLARATORS_OF_DECLARATION_LIST(list)
+    rv++;
+  return rv;
+}
+
+
+
+static bool
+declaration_list_to_params (P_Context *context, 
+                            P_DeclarationList *list,
+                            size_t *n_params_out,
+                            DBCC_Param **params_out)
+{
+  if (list == NULL)
+    {
+      *n_params_out = 0;
+      *params_out = NULL;
+      return true;
+    }
+  size_t n_params = declaration_list_count_declarators (list);
+  DBCC_Param *params = malloc (sizeof (DBCC_Param) * n_params);
+  size_t cur_n_params = 0;
+  ITERATE_DECLARATORS_OF_DECLARATION_LIST(list)
+    {
+      DBCC_Type *param_type = type_from_parts (context, declaration, declarator);
+      if (param_type == NULL)
+        {
+          free (params);        ///TODO other cleanup
+          return false;
+        }
+      params[cur_n_params].name = name_from_declarator (declarator);
+    }
+  assert (cur_n_params == n_params);
+  *n_params_out = n_params;
+  *params_out = params;
+  return true;
+}
 
 static void
 error_set_code_location_from_expr (P_Context *context, DBCC_Expr *expr)
@@ -1047,8 +1518,7 @@ error_set_code_location_from_expr (P_Context *context, DBCC_Expr *expr)
     dbcc_error_add_code_position (context->error, expr->base.code_position);
 }
 
-}
-////// end of "included" code
+} ////// end of "included" code
 
 %extra_argument {P_Context *context}
 
@@ -1070,11 +1540,14 @@ error_set_code_location_from_expr (P_Context *context, DBCC_Expr *expr)
 %type init_declarator               {P_Declarator *}
 %type struct_declarator             {P_Declarator *}
 %type function_definition           {P_Declarator *}
+%type struct_or_union               {bool}               // true if struct; false if union
 
 %type opt_designation               {P_DesignatorList}
 %type designation                   {P_DesignatorList}
 %type designator                    {P_Designator *}
-%type enumerator                    {P_Enumerator *}
+%type enumerator                    {DBCC_EnumValue *}
+
+%type pointer                       {P_Pointer}
 
 %type expression                    {DBCC_Expr *}
 %type additive_expression           {DBCC_Expr *}
@@ -1104,7 +1577,7 @@ error_set_code_location_from_expr (P_Context *context, DBCC_Expr *expr)
 %type block_item_list               {P_StatementList}
 %type declaration_list              {P_DeclarationList}
 %type designator_list               {P_DesignatorList}
-%type enumerator_list               {P_EnumeratorList}
+%type enumerator_list               {P_EnumValueList}
 %type generic_assoc_list            {P_GenericAssociationList}
 %type init_declarator_list          {P_DeclaratorList}
 %type initializer_list              {P_InitializerList}
@@ -1113,6 +1586,7 @@ error_set_code_location_from_expr (P_Context *context, DBCC_Expr *expr)
 
 /* same a P_DeclarationList, except support for varargs */
 %type parameter_type_list           {P_ParameterList} 
+%type opt_parameter_type_list       {P_ParameterList} 
 
 %type specifier_qualifier_list      {P_Declaration *}
 %type struct_declaration_list       {P_DeclarationList}
@@ -1127,12 +1601,13 @@ error_set_code_location_from_expr (P_Context *context, DBCC_Expr *expr)
 %type type_qualifier_list           {DBCC_TypeQualifier}
 %type type_qualifier                {DBCC_TypeQualifier}
 %type alignment_specifier           {P_AlignmentSpecifier *}
-%type enum_specifier                {P_TypeSpecifiers}
+%type enum_specifier                {DBCC_Type *}
 %type function_specifier            {DBCC_FunctionSpecifiers}
 %type storage_class_specifier       {DBCC_StorageClassSpecifier}
-%type struct_specifier              {P_TypeSpecifiers}
+%type struct_specifier              {DBCC_Type *}
 %type type_specifier                {P_TypeSpecifiers}
-%type union_specifier               {P_TypeSpecifiers}
+%type union_specifier               {DBCC_Type *}
+%type struct_or_union_specifier     {DBCC_Type *}
 %type declaration_specifiers        {P_Declaration *}
 %type opt_declaration_specifiers    {P_Declaration *}
 %type statement                     {DBCC_Statement*}
@@ -1169,7 +1644,7 @@ error_set_code_location_from_expr (P_Context *context, DBCC_Expr *expr)
 %destructor opt_designation               {p_designator_list_clear(&$$);}
 %destructor designation                   {p_designator_list_clear(&$$);}
 %destructor designator                    {p_designator_destroy($$);}
-%destructor enumerator                    {p_enumerator_destroy($$);}
+%destructor enumerator                    {free($$);}
 
 %destructor expression                    {dbcc_expr_destroy($$);}
 %destructor additive_expression           {dbcc_expr_destroy($$);}
@@ -1217,10 +1692,10 @@ error_set_code_location_from_expr (P_Context *context, DBCC_Expr *expr)
 %destructor opt_identifier                {}//TODO: symbol_unref
 
 %destructor alignment_specifier           {p_alignment_specifier_destroy($$);}
-%destructor enum_specifier                {p_type_specifiers_clear(&$$);}
-%destructor struct_specifier              {p_type_specifiers_clear(&$$);}
+%destructor enum_specifier                {dbcc_type_unref($$);}
+%destructor struct_specifier              {dbcc_type_unref($$);}
 %destructor type_specifier                {p_type_specifiers_clear(&$$);}
-%destructor union_specifier               {p_type_specifiers_clear(&$$);}
+%destructor union_specifier               {dbcc_type_unref($$);}
 %destructor declaration_specifiers        {p_declaration_destroy($$);}
 %destructor opt_declaration_specifiers    {p_declaration_destroy($$);}
 %destructor statement                     {dbcc_statement_destroy($$);}
@@ -1240,7 +1715,7 @@ error_set_code_location_from_expr (P_Context *context, DBCC_Expr *expr)
 primary_expression(rv) ::= IDENTIFIER(id).
         { DBCC_NamespaceEntry ns_entry;
           if (!p_context_lookup (context, id.symbol, id.code_position, &ns_entry))
-            return;             /// error set by p_context_lookup
+            FAIL();             /// error set by p_context_lookup
 
           // for purposes for the grammar,
           //     DBCC_NAMESPACE_ENTRY_ENUM_VALUE
@@ -1539,7 +2014,7 @@ constant_expression(rv) ::= conditional_expression(a).
               context->error = dbcc_error_new (DBCC_ERROR_CONSTANT_REQUIRED,
                                  "constant value required");
               error_set_code_location_from_expr (context, a);
-              return;
+              FAIL();
             }
         }
 
@@ -1575,7 +2050,7 @@ declaration_specifiers(rv) ::= storage_class_specifier(scs) opt_declaration_spec
 declaration_specifiers(rv) ::= type_specifier(ts) opt_declaration_specifiers(a).
         { rv = a; a = NULL;
           if (!p_type_specifiers_combine (context, &a->v_declaration.specifiers, &ts))
-            return;
+            FAIL();
         }
 declaration_specifiers(rv) ::= type_qualifier(tq) opt_declaration_specifiers(a).
         { rv = a;
@@ -1586,7 +2061,7 @@ declaration_specifiers(rv) ::= alignment_specifier(s) opt_declaration_specifiers
             {
               context->error = dbcc_error_new (DBCC_ERROR_DUPLICATE,
                                                "multiple alignment specifies given: not allowed");
-              return;
+              FAIL();
             }
           rv->v_declaration.alignment_specifier = s; }
 declaration_specifiers(rv) ::= function_specifier(fspec).
@@ -1657,52 +2132,86 @@ type_specifier(rv) ::= COMPLEX.
 type_specifier(rv) ::= IMAGINARY.
         { rv = P_TYPE_SPECIFIERS_INIT;
           rv.counts[P_TYPE_SPECIFIERS_INDEX_CHAR] = 1; }
-type_specifier(rv) ::= ATOMIC LPAREN type_name(type) RPAREN.
+type_specifier(rv) ::= ATOMIC LPAREN type_name(nonatomic_type) RPAREN.
         { rv = P_TYPE_SPECIFIERS_INIT;
           rv.counts[P_TYPE_SPECIFIERS_INDEX_ATOMIC]++;
-          rv.atomic_type = type; }
-type_specifier(rv) ::= struct_specifier(a).
-        { rv = a; }
+          rv.type = dbcc_type_new_atomic (nonatomic_type);
+          if (rv.type == NULL)
+            {
+              context->error = dbcc_error_new (DBCC_ERROR_NONATOMIC,
+                                               "cannot make a nonatomic type from %s",
+                                               dbcc_type_to_cstring (nonatomic_type));
+              FAIL();
+            }
+        }
+type_specifier(rv) ::= struct_or_union_specifier(a).
+        { rv = P_TYPE_SPECIFIERS_INIT;
+          unsigned s_or_u_index = a.metatype == DBCC_TYPE_METATYPE_STRUCT
+                                ? P_TYPE_SPECIFIERS_INDEX_STRUCT
+                                ? P_TYPE_SPECIFIERS_INDEX_UNION;
+          rv.counts[P_TYPE_SPECIFIERS_INDEX_STRUCT] = 1;
+          rv.type = a; }
 type_specifier(rv) ::= union_specifier(a).
-        { rv = a; }
+        { rv = P_TYPE_SPECIFIERS_INIT;
+          rv.counts[P_TYPE_SPECIFIERS_INDEX_UNION] = 1;
+          rv.type = a; }
 type_specifier(rv) ::= enum_specifier(a).
-        { rv = a; }
+        { rv = P_TYPE_SPECIFIERS_INIT;
+          rv.counts[P_TYPE_SPECIFIERS_INDEX_ENUM] = 1;
+          rv.type = a; }
 type_specifier(rv) ::= TYPEDEF_NAME(t).
 	{ rv = P_TYPE_SPECIFIERS_INIT;
           rv.counts[P_TYPE_SPECIFIERS_INDEX_TYPEDEF] = 1;
-          rv.typedef_type = t.type; }
+          rv.type = t.type; }
 
 struct_specifier(rv) ::= STRUCT opt_identifier(tag) LBRACE struct_declaration_list(list) RBRACE.
-        { p_type_specifiers_init_struct (rv, tag, list); }
-struct_specifier(rv) ::= STRUCT IDENTIFIER(tag_token).
-        { p_type_specifiers_init_struct_stub (rv, tag_token.v_symbol, list); }
-union_specifier(rv)  ::= UNION opt_identifier(tag) LBRACE struct_declaration_list(list) RBRACE.
-        { p_type_specifiers_init_union (rv, tag, list); }
-union_specifier(rv)  ::= UNION IDENTIFIER(id).
-        { p_type_specifiers_init_union_stub (rv, id->str); }
+        { DBCC_Param *params;
+          size_t n_params;
+          if (!declaration_list_to_params (context, &list, &n_params, &params))
+            FAIL();
+          rv = dbcc_type_new_struct (tag, n_params, params, &context->error);
+          if (rv == NULL)
+            FAIL();
+        }
+
+struct_or_union(is_struct) ::= STRUCT.
+        { is_struct = true; }
+struct_or_union(is_struct) ::= UNION.
+        { is_struct = false; }
+
+struct_or_union_specifier(rv) ::= struct_or_union(is_struct) IDENTIFIER(tag_token).
+        { rv = context_new_struct_or_union_stub (context,
+                                                 is_struct,
+                                                 tag_token.symbol,
+                                                 tag_token.code_position); }
+struct_or_union_specifier(rv)  ::= struct_or_union(is_struct) opt_identifier(tag) LBRACE struct_declaration_list(list) RBRACE.
+        { rv = context_new_struct_or_union (context,
+                                            is_struct,
+                                            tag_token.symbol,
+                                            tag_token.code_position,
+                                            n_params, params);
+        }
 
 struct_declaration_list(rv) ::= struct_declaration(a).
-        { rv.first = rv.last = NULL;
-          dbcc_declaration_list_append(rv, a);
-          a = NULL; }
+        { rv.first_declaration = rv.last_declaration = a;
+          a->next = NULL; }
 struct_declaration_list(rv) ::= struct_declaration_list(in) struct_declaration(a).
         { rv = in;
-          in.first = in.last = NULL;
-          dbcc_declaration_list_append(rv, a);
-          a = NULL; }
+          rv.last_declaration->next = a;
+          rv.last_declaration = a;
+          a->next = NULL; }
 
 struct_declaration(rv) ::= specifier_qualifier_list(in) SEMICOLON.   /* for anonymous struct/union within structs */
         {
-          ... assert specifier_qualifier_list must be a struct or union (non-stub)
+          assert(in->v_declaration.specifiers.counts[P_TYPE_SPECIFIERS_INDEX_STRUCT] > 0
+              || in->v_declaration.specifiers.counts[P_TYPE_SPECIFIERS_INDEX_UNION] > 0);
           rv = in;
-          in = NULL;
         }
 struct_declaration(rv) ::= specifier_qualifier_list(list) struct_declarator_list(add) SEMICOLON.
         {
-          p_declaration_add_declarator_list(list, &add);
+          assert(list->v_declaration.declarators.first_declarator == NULL);
+          list->v_declaration.declarators = add;
           rv = list;
-          list = NULL;
-          add.first = add.last = NULL;
         }
 struct_declaration(rv) ::= static_assert_declaration(sadecl).
 	{
@@ -1711,96 +2220,109 @@ struct_declaration(rv) ::= static_assert_declaration(sadecl).
 	}
 
 specifier_qualifier_list(rv) ::= type_specifier(ts) specifier_qualifier_list(a).
-        { rv = a; a = NULL;
-          if (!dbcc_type_specifiers_combine (ts, rv.type_specifier, &tmp))
-            {
-              ...
-            }
-          a.first = a.last = NULL;
-          ts.elements = NULL;
-          ts.n_elements = 0;
-          ts.id = NULL;
+        { rv = a; 
+          if (!p_type_specifiers_combine (context, &rv->v_declaration.specifiers, &ts))
+            FAIL();
         }
 
 specifier_qualifier_list(rv) ::= type_specifier(ts).
-	{ rv = dbcc_specifier_qualifier_list_new_from_type_specifier (ts);
-          ts.elements = NULL;
-          ts.n_elements = 0;
-          ts.id = NULL; }
+	{ rv = p_declaration_new ();
+          rv->v_declaration.specifiers = ts; }
 
 specifier_qualifier_list(rv) ::= type_qualifier(tq) specifier_qualifier_list(a).
         { rv = a;
-          rv.type_qualifier |= tq;
-          a.first = a.last = NULL; }
+          rv->v_declaration.qualifiers |= tq; }
 specifier_qualifier_list(rv) ::= type_qualifier(tq).
-	{ rv = dbcc_specifier_qualifier_list_new ();
-          rv.type_qualifier |= tq; }
+	{ rv = p_declaration_new ();
+          rv->v_declaration.qualifiers |= tq; }
 
 // a comma-separated list of variables with qualifiers,
 // in an expression like 'int a, *b'
 // the whole thing is a "declaration" and "a" and "b" are "declarators".
 struct_declarator_list(list) ::= struct_declarator(decl).
-        { list = dbcc_declarator_list_new ();
-          dbcc_declarator_list_append (list, decl);
-          decl = NULL; }
+        { list.first_declarator = list.last_declarator = decl;
+          decl->next = NULL; }
 struct_declarator_list(list) ::= struct_declarator_list(in) COMMA struct_declarator(decl).
         { list = in;
-          in.first = in.last = NULL;
-          dbcc_declarator_list_append (list, decl);
-          decl = NULL; }
+          list.last_declarator->next = decl;
+          list.last_declarator = decl;
+          decl->next = NULL; }
 
 struct_declarator(sdecl) ::= COLON constant_expression(bitcount).
-        { DBCC_Declarator *tmp = dbcc_declarator_new ();
-          tmp->bitcount_expr = bitcount;  // verify constant???
-          sdecl = tmp;
-          bitcount = NULL; }
+        { sdecl = p_declarator_new_bitfield (NULL, bitcount); }
 struct_declarator(sdecl) ::= declarator(decl) COLON constant_expression(bitcount).
-        { decl->bitcount_expr = bitcount;  // verify constant???
-          sdecl = decl;
-          decl = NULL;
-          bitcount = NULL; }
+        { sdecl = p_declarator_new_bitfield (decl, bitcount); }
 struct_declarator(sdecl) ::= declarator(decl).
-        { sdecl = decl;
-          decl = NULL; }
+        { sdecl = decl; }
 
 enum_specifier(rv) ::= ENUM opt_identifier(id) LBRACE enumerator_list(list) opt_comma RBRACE.
         { unsigned n_values = 0;
-          for (P_Enumerator *e = list.first; e != NULL; e = e->next)
+          for (P_EnumValueNode *e = list.first; e != NULL; e = e->next)
             n_values++;
-          DBCC_EnumValue *values = malloc (sizeof (DBCC_EnumValue) * n_values);
           unsigned i = 0;
-          for (P_Enumerator *e = list.first; e != NULL; e = e->next, i++)
-            {
-              values[i]. ... = ...;
-            }
-          rv = dbcc_type_new_enum (context, id->v_symbol, n_values, values);
-          free (values);
+          DBCC_EnumValue **evalues = malloc (sizeof(DBCC_EnumValue*) * n_values);
+
+          for (P_EnumValueNode *e = list.first; e != NULL; e = e->next, i++)
+            evalues[i] = e->enum_value;
+          rv = dbcc_type_new_enum (id, n_values, evalues);
+          p_enumerator_list_clear (&list);
         }
 
 opt_identifier(rv) ::= .
         { rv = NULL; }
 opt_identifier(rv) ::= IDENTIFIER(id).
-        { rv = id->v_symbol; id->v_symbol = NULL; }
+        { rv = id.symbol; }
 
 enumerator_list(rv) ::= enumerator(e).
-        { e->next = NULL; rv.first = rv.last = e; e = NULL; }
+        { P_EnumValueNode *node = malloc (sizeof (P_EnumValueNode));
+          node->enum_value = e;
+          node->next =  NULL;
+          rv.first = rv.last = node; }
 enumerator_list(rv) ::= enumerator_list(a) COMMA enumerator(e).
-        { if (a.first == NULL)
-            a.first = e;
+        { P_EnumValueNode *node = malloc (sizeof (P_EnumValueNode));
+          node->enum_value = e;
+          node->next =  NULL;
+          if (a.first == NULL)
+            a.first = node;
           else
-            a.last->next = e;
-          a.last = e;
-          e.next = NULL;
-          
-          rv = a;
-          a.first = a.last = NULL; }
+            a.last->next = node;
+          a.last = node;
+          rv = a; }
 
+/* 6.7.2.2.3: ... If the first enumerator has no =, the value of
+                  its enumeration constant is 0. Each subsequent enumerator
+                  with no = defines its enumeration constant as the value
+                  of the constant expression obtained by adding 1 to the value
+                  of the previous enumeration constant. ... */
 // an enumeration value, with value either implicit (assigned automatically)
 // or explicit (derived from a constant expression).
 enumerator(rv) ::= enumeration_constant(c) EQUALS constant_expression(v).
-        { rv = dbcc_enum_value_new (c, v); c = NULL; v = NULL; }
+        { 
+          int value;
+          /* 6.7.2.2.2.  The expression that defines the value of an enumeration constant
+                         shall be an integer constant expression that has a value representable
+                         as an int. */
+          if (!dbcc_cast_value (dbcc_namespace_get_int_type (context->globals),
+                                &value,
+                                v->base.value_type,
+                                v->base.constant_value))
+            {
+              DBCC_Symbol *type_name = v->base.value_type->base.name;
+              context->error = dbcc_error_new (DBCC_ERROR_EXPECTED_INT,
+                                               "enumeration value expression must be an int, got %s (for %s)",
+                                               type_name ? dbcc_symbol_get_string(type_name) : "<anonymous-type>",
+                                               dbcc_symbol_get_string(c));
+              FAIL();
+            }
+          context->next_enum_value = value + 1;
+          rv = dbcc_enum_value_new (c, value);
+        }
 enumerator(rv) ::= enumeration_constant(c).
-        { rv = dbcc_enum_value_new (c, NULL); c = NULL; }
+        { 
+          int value = context->next_enum_value;
+          context->next_enum_value = value + 1;
+          rv = dbcc_enum_value_new (c, value);
+        }
 
 type_qualifier(rv) ::= CONST.
         { rv = DBCC_TYPE_QUALIFIER_CONST; }
@@ -1817,79 +2339,54 @@ function_specifier(rv) ::= NORETURN.
         { rv = DBCC_FUNCTION_SPECIFIER_NORETURN; }
 
 alignment_specifier(rv) ::= ALIGNAS LPAREN type_name(type) RPAREN.
-        { rv.specifier_type = P_ALIGNMENT_SPECIFIER_BY_TYPE;
-          rv.v_type = type;
-          type = NULL; }
+        { rv = malloc (sizeof (P_AlignmentSpecifier));
+          rv->specifier_type = P_ALIGNMENT_SPECIFIER_BY_TYPE;
+          rv->v_type = type; }
 alignment_specifier(rv) ::= ALIGNAS LPAREN constant_expression(expr) RPAREN.
-        { rv.specifier_type = P_ALIGNMENT_SPECIFIER_BY_EXPR;
-          rv.v_expr = expr;
-          expr = NULL; }
+        { rv = malloc (sizeof (P_AlignmentSpecifier));
+          rv->specifier_type = P_ALIGNMENT_SPECIFIER_BY_EXPR;
+          rv->v_expr = expr; }
 
 declarator(out) ::= pointer(ptr) direct_declarator(in).
-        { out = in; in = NULL;
-          dbcc_declarator_prepend_pointer_spec(out, ptr.n_ptr, ptr.ptr_type_qualifiers); }
+        { P_Declarator *cur = in;
+          for (unsigned i = 0; i < ptr.n_ptr; i++)
+            cur = p_declarator_new_pointer(ptr.ptr_type_qualifiers[i], cur);
+          out = cur; }
 declarator(out) ::= direct_declarator(in).
-        { out = in; in = NULL; }
+        { out = in; }
 
 direct_declarator(decl) ::= IDENTIFIER(id).
-        { decl = dbcc_declarator_new (id->v_symbol); id->info.v_symbol = NULL; }
+        { decl = p_declarator_new_name (id.symbol); }
 
 direct_declarator(decl) ::= LPAREN declarator(in) RPAREN.
-        { decl = in; in = NULL; }
+        { decl = in; }
 direct_declarator(decl) ::= direct_declarator(in) LBRACKET opt_type_qualifier_list(tq) RBRACKET.
-        { decl = in; dbcc_declarator_append_array (decl, tq, NULL); in = NULL; }
+        { decl = p_declarator_new_array(tq, NULL, in); }
 
 direct_declarator(decl) ::= direct_declarator(in) LBRACKET STATIC opt_type_qualifier_list(tq) assignment_expression(index_expr) RBRACKET.
-        { decl = in;
-          dbcc_declarator_append_array (decl, tq, index_expr);
-          in = NULL;
-        }
+        { decl = p_declarator_new_array(tq, index_expr, in); }
 direct_declarator(decl) ::= direct_declarator(in) LBRACKET type_qualifier_list(tq) STATIC assignment_expression(index_expr) RBRACKET.
-        { decl = in;
-          dbcc_declarator_append_array (decl, tq, index_expr);
-          in = NULL;
-        }
+        { decl = p_declarator_new_array(tq, index_expr, in); }
 direct_declarator(decl) ::= direct_declarator(in) LBRACKET opt_type_qualifier_list(tq) assignment_expression(index_expr) RBRACKET.
-        { decl = in;
-          dbcc_declarator_append_array (decl, tq, index_expr);
-          in = NULL;
-        }
+        { decl = p_declarator_new_array(tq, index_expr, in); }
 direct_declarator(decl) ::= direct_declarator(in) LBRACKET opt_type_qualifier_list(tq) ASTERISK RBRACKET.
-        { decl = in;
-          dbcc_declarator_append_variable_length_array (decl, tq);
-          in = NULL; }
+        { decl = p_declarator_new_varlen_array(tq, in); }
 direct_declarator(decl) ::= direct_declarator(in) LPAREN parameter_type_list(plist) RPAREN.
-        { decl = in;
-          in = NULL;
-          dbcc_declarator_append_function (decl, plist.first);
-          plist.first = plist.last = NULL;
-        }
+        { decl = p_declarator_new_function(in, &plist); }
 direct_declarator(decl) ::= direct_declarator(in) LPAREN RPAREN.
-        { decl = in;
-          in = NULL;
-          dbcc_declarator_append_function_no_args (decl);
-        }
+        { decl = p_declarator_new_function(in, NULL); }
 direct_declarator(decl) ::= direct_declarator(in) LPAREN identifier_list(idlist) RPAREN.
-        { decl = in;
-          in = NULL;
-          unsigned n_symbols = 0;
-          for (P_IdentifierList *at = idlist.first; at; at = at->next)
-            n_symbols++;
-          unsigned i = 0;
-          symbols = malloc (sizeof (DBCC_Symbol *) * n_symbols);
-          for (P_IdentifierList *at = idlist.first; at; at = at->next)
-            symbols[i++] = at->symbol;
-          dbcc_declarator_append_function_kr (decl, n_symbols, symbols);
-        }
+        { decl = p_declarator_new_function_kr (in, &idlist); }
 
 opt_comma ::= .
 opt_comma ::= COMMA.
 
 pointer(rv) ::= ASTERISK opt_type_qualifier_list(tq) pointer(a).
-        { rv.n_ptr = a.n_ptr + 1
+        { rv.n_ptr = a.n_ptr + 1;
           rv.ptr_type_qualifiers = malloc (sizeof(DBCC_TypeQualifier) * rv.n_ptr);
           rv.ptr_type_qualifiers[0] = tq;
-          memcpy (rv.ptr_type_qualifiers + 1, a.ptr_type_qualifiers, sizeof(DBCC_TypeQualifier) * a.n_ptr); }
+          memcpy (rv.ptr_type_qualifiers + 1, a.ptr_type_qualifiers, sizeof(DBCC_TypeQualifier) * a.n_ptr);
+          free (a.ptr_type_qualifiers); }
 pointer(rv) ::= ASTERISK opt_type_qualifier_list(tq).
         { rv.n_ptr = 1;
           rv.ptr_type_qualifiers = malloc (sizeof(DBCC_TypeQualifier));
@@ -1908,55 +2405,43 @@ type_qualifier_list(o) ::= type_qualifier_list(a) type_qualifier(i).
 
 
 parameter_type_list(rv) ::= parameter_list(a) COMMA ELLIPSIS.
-        { rv = a;
-          a = NULL;
-          rv->is_vararg = true; }
+        { rv.parameters = a;
+          rv.has_varargs = true; }
 parameter_type_list(rv) ::= parameter_list(a).
-        { rv = a;
-          a = NULL; }
+        { rv.parameters = a;
+          rv.has_varargs = false; }
 
 parameter_list(rv) ::= parameter_declaration(decl).
-        { rv.first = rv.last = decl;
-          decl->next = NULL;
-          decl = NULL; }
+        { rv.first_declaration = rv.last_declaration = decl;
+          decl->next = NULL; }
 parameter_list(rv) ::= parameter_list(a) COMMA parameter_declaration(decl).
-        { if (a.first == NULL)
-            a.first = decl;
-          else
-            a.last->next = decl;
-          a.last = decl;
-          rv = a;
-          a.first = a.last = NULL;
-          decl = NULL; }
+        { a.last_declaration->next = decl;
+          a.last_declaration = decl;
+          decl->next = NULL;
+          rv = a; }
 
 parameter_declaration(rv) ::= declaration_specifiers(type) declarator(name).
-        { rv = p_declaration_new ();
-          p_declaration_add_declaration_specifiers(rv, type);
-          p_declaration_add_declarator(rv, name);
-          type = NULL;
-          name = NULL; }
+        { rv = type;
+          p_declaration_append_declarator (rv, name); }
 parameter_declaration(rv) ::= declaration_specifiers(type) abstract_declarator(nonname).
-        { rv = p_declaration_new ();
-          p_declaration_add_declaration_specifiers(rv, type);
-          p_declaration_add_declarator(rv, nonname);
-          type = NULL;
-          nonname = NULL; }
+        { rv = type;
+          p_declaration_append_declarator(rv, nonname); }
 parameter_declaration(rv) ::= declaration_specifiers(type).
-        { rv = p_declaration_new ();
-          p_declaration_add_declaration_specifiers(rv, type);
-          type = NULL; }
+        { rv = type; }
 
 opt_parameter_type_list(rv) ::= parameter_type_list(list).
-        { rv = list; list = NULL; }
+        { rv = list; }
 opt_parameter_type_list(rv) ::= .
-        { rv = NULL; }
+        { rv.parameters.first_declaration = NULL;
+          rv.parameters.last_declaration = NULL;
+          rv.has_varargs = false; }
 
 identifier_list(rv) ::= IDENTIFIER(id).
-        { rv = { NULL, NULL };
-          dbcc_p_identifier_list_append (&rv, id->info.v_symbol); }
+        { rv.first = rv.last = NULL;
+          p_identifier_list_append (&rv, id.symbol); }
 identifier_list(rv) ::= identifier_list(a) COMMA IDENTIFIER(id).
-        { rv = a; a.first = a.last = NULL;
-          dbcc_p_identifier_list_append (&rv, id->info.v_symbol); }
+        { rv = a;
+          p_identifier_list_append (&rv, id.symbol); }
 
 type_name(type) ::= specifier_qualifier_list(q) abstract_declarator(d).
         { type = type_from_parts (context, q, d); }

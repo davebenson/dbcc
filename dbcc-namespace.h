@@ -48,3 +48,28 @@ DBCC_Type *
 dbcc_namespace_lookup_enum_tag   (DBCC_Namespace      *ns,
                                   DBCC_Symbol         *symbol);
 
+void dbcc_namespace_add_enum_value (DBCC_Namespace *ns,
+                                    DBCC_EnumValue *enum_value);
+
+DBCC_Type * dbcc_namespace_get_float_complex_type (DBCC_Namespace *ns);
+DBCC_Type * dbcc_namespace_get_double_complex_type (DBCC_Namespace *ns);
+DBCC_Type * dbcc_namespace_get_long_double_complex_type (DBCC_Namespace *ns);
+DBCC_Type * dbcc_namespace_get_float_imaginary_type (DBCC_Namespace *ns);
+DBCC_Type * dbcc_namespace_get_double_imaginary_type (DBCC_Namespace *ns);
+DBCC_Type * dbcc_namespace_get_long_double_imaginary_type (DBCC_Namespace *ns);
+
+DBCC_Type * dbcc_namespace_get_char_type              (DBCC_Namespace *);
+DBCC_Type * dbcc_namespace_get_double_type            (DBCC_Namespace *);
+DBCC_Type * dbcc_namespace_get_float_type             (DBCC_Namespace *);
+DBCC_Type * dbcc_namespace_get_long_double_type       (DBCC_Namespace *);
+DBCC_Type * dbcc_namespace_get_long_long_type         (DBCC_Namespace *);
+DBCC_Type * dbcc_namespace_get_long_type              (DBCC_Namespace *);
+DBCC_Type * dbcc_namespace_get_short_type             (DBCC_Namespace *);
+DBCC_Type * dbcc_namespace_get_signed_char_type       (DBCC_Namespace *);
+DBCC_Type * dbcc_namespace_get_unsigned_int_type      (DBCC_Namespace *);
+DBCC_Type * dbcc_namespace_get_unsigned_long_long_type(DBCC_Namespace *);
+DBCC_Type * dbcc_namespace_get_unsigned_long_type     (DBCC_Namespace *);
+DBCC_Type * dbcc_namespace_get_unsigned_short_type    (DBCC_Namespace *);
+DBCC_Type * dbcc_namespace_get_unsigned_short_type    (DBCC_Namespace *);
+DBCC_Type * dbcc_namespace_get_int_type               (DBCC_Namespace *);
+DBCC_Type * dbcc_namespace_get_sizet_type             (DBCC_Namespace *);

@@ -1,5 +1,9 @@
 
-typedef struct DBCC_GlobalNamespace DBCC_GlobalNamespace;
+typedef struct DBCC_Namespace DBCC_Namespace;
+typedef struct DBCC_Param DBCC_Param;
+typedef union DBCC_Type DBCC_Type;
+typedef union DBCC_Statement DBCC_Statement;
+typedef union DBCC_Expr DBCC_Expr;
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -91,9 +95,11 @@ typedef enum
 } DBCC_FunctionSpecifiers;
 typedef struct
 {
-  int value;
   DBCC_Symbol* name;
+  int value;
 } DBCC_EnumValue;
+DBCC_EnumValue *dbcc_enum_value_new (DBCC_Symbol *symbol,
+                                     int          value);
 
 typedef struct DBCC_String DBCC_String;
 struct DBCC_String
@@ -107,6 +113,14 @@ DBCC_INLINE void dbcc_string_clear (DBCC_String *clear)
     free (clear->str);
   *clear = (DBCC_String){0, NULL};
 }
+
+// for struct members, (formal) function parameters, union cases,
+// maybe globals.
+struct DBCC_Param
+{
+  DBCC_Type *type;
+  DBCC_Symbol *name;
+};
 
 #include "dbcc-type.h"
 #include "dbcc-expr.h"
