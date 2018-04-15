@@ -4,6 +4,7 @@ struct DBCC_CodePosition
 {
   size_t ref_count;
   DBCC_CodePosition *expanded_from;
+  DBCC_CodePosition *included_from;
   DBCC_Symbol *filename;
   unsigned line_no;
   unsigned column;
@@ -11,6 +12,7 @@ struct DBCC_CodePosition
 };
 
 DBCC_CodePosition *dbcc_code_position_new   (DBCC_CodePosition *expanded_from,
+                                             DBCC_CodePosition *included_from,
                                              DBCC_Symbol       *filename,
                                              unsigned           line_no,
                                              unsigned           column,

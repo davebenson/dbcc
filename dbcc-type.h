@@ -123,10 +123,18 @@ DBCC_Type *dbcc_type_new_struct   (DBCC_Symbol        *tag,
                                    size_t              n_members,
                                    DBCC_Param         *members,
                                    DBCC_Error        **error);
+DBCC_Type *dbcc_type_new_incomplete_struct (DBCC_Symbol *tag);
 DBCC_Type *dbcc_type_new_union    (DBCC_Symbol        *tag,
                                    size_t              n_cases,
                                    DBCC_Param         *cases,
                                    DBCC_Error        **error);
+DBCC_Type *dbcc_type_new_incomplete_union (DBCC_Symbol *tag);
+void       dbcc_type_complete_struct(DBCC_Type        *type,
+                                   size_t              n_members,
+                                   DBCC_Param         *members);
+void       dbcc_type_complete_union(DBCC_Type         *type,
+                                   size_t              n_members,
+                                   DBCC_Param         *members);
 /// note that only integer, enum_value, pointer types may be atomic
 DBCC_Type *dbcc_type_new_atomic   (DBCC_Type          *non_atomic_type);
 

@@ -47,6 +47,10 @@ dbcc_namespace_lookup_union_tag  (DBCC_Namespace      *ns,
 DBCC_Type *
 dbcc_namespace_lookup_enum_tag   (DBCC_Namespace      *ns,
                                   DBCC_Symbol         *symbol);
+void dbcc_namespace_add_by_tag   (DBCC_Namespace      *ns,
+                                  DBCC_Type           *type);   // must be struct, union or enum with tag
+
+
 
 void dbcc_namespace_add_enum_value (DBCC_Namespace *ns,
                                     DBCC_EnumValue *enum_value);

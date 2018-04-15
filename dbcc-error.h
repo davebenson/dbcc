@@ -1,3 +1,17 @@
+typedef struct DBCC_Error DBCC_Error;
+typedef struct DBCC_ErrorList DBCC_ErrorList;
+typedef struct DBCC_ErrorNode DBCC_ErrorNode;
+
+struct DBCC_ErrorNode
+{
+  DBCC_ErrorNode *next;
+  DBCC_Error *error;
+};
+struct DBCC_ErrorList
+{
+  DBCC_Error *first_error;
+  DBCC_Error *last_error;
+};
 
 typedef enum
 {
@@ -9,12 +23,14 @@ typedef enum
   DBCC_ERROR_EXPECTED_INT,
   DBCC_ERROR_NO_COMPLEX_VARIANT,
   DBCC_ERROR_NONATOMIC,
+  DBCC_ERROR_MULTIPLE_DEFINITION,
+  DBCC_ERROR_EXPECTED_EXPRESSION,
 } DBCC_ErrorCode;
 
 
 typedef enum
 {
-  DBCC_ERROR_DATA_TYPE_CAUSE
+  DBCC_ERROR_DATA_TYPE_CAUSES
 } DBCC_ErrorDataType;
 typedef struct DBCC_Error DBCC_Error;
 typedef struct DBCC_ErrorData DBCC_ErrorData;
@@ -22,6 +38,11 @@ struct DBCC_ErrorData
 {
   DBCC_ErrorDataType type;
   DBCC_ErrorData *next;
+};
+struct DBCC_ErrorData_Causes
+{
+  DBCC_ErrorData base;
+  DBCC_ErrorList causes;
 };
 
 struct DBCC_Error

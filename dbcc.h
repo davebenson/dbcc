@@ -7,6 +7,7 @@ typedef union DBCC_Expr DBCC_Expr;
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdlib.h>
 #include <string.h>
 #include "dbcc-symbol.h"
 #include "dbcc-code-position.h"
