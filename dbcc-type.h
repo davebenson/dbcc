@@ -36,9 +36,30 @@ struct DBCC_TypeInt
 {
   DBCC_Type_Base base;
 };
+
+typedef enum
+{
+  DBCC_FLOAT_TYPE_FLOAT,
+  DBCC_FLOAT_TYPE_DOUBLE,
+  DBCC_FLOAT_TYPE_LONG_DOUBLE,
+
+  /* Annex G requires these 6 types.
+   *
+   * Imaginary types should have * storage like the corresponding reals,
+   * but semantics like the corresponding complex numbers.
+   */
+  DBCC_FLOAT_TYPE_COMPLEX_FLOAT,
+  DBCC_FLOAT_TYPE_COMPLEX_DOUBLE,
+  DBCC_FLOAT_TYPE_COMPLEX_LONG_DOUBLE,
+  DBCC_FLOAT_TYPE_IMAGINARY_FLOAT,
+  DBCC_FLOAT_TYPE_IMAGINARY_DOUBLE,
+  DBCC_FLOAT_TYPE_IMAGINARY_LONG_DOUBLE,
+} DBCC_FloatType;
 struct DBCC_TypeFloat
 {
   DBCC_Type_Base base;
+  DBCC_FloatType float_type;
+  bool is_complex;
 };
 struct DBCC_TypeEnum
 {
@@ -117,25 +138,29 @@ DBCC_Type *dbcc_type_new_function (DBCC_Type          *rettype,
                                    size_t              n_params,
                                    DBCC_Param         *params,
                                    bool                has_varargs);
+
 DBCC_Type *dbcc_type_new_qualified(DBCC_Type          *base_type,
                                    DBCC_TypeQualifier  qualifiers);
+
 DBCC_Type *dbcc_type_new_struct   (DBCC_Symbol        *tag,
                                    size_t              n_members,
                                    DBCC_Param         *members,
                                    DBCC_Error        **error);
 DBCC_Type *dbcc_type_new_incomplete_struct (DBCC_Symbol *tag);
+void       dbcc_type_complete_struct(DBCC_Type        *type,
+                                   size_t              n_members,
+                                   DBCC_Param         *members);
+
 DBCC_Type *dbcc_type_new_union    (DBCC_Symbol        *tag,
                                    size_t              n_cases,
                                    DBCC_Param         *cases,
                                    DBCC_Error        **error);
 DBCC_Type *dbcc_type_new_incomplete_union (DBCC_Symbol *tag);
-void       dbcc_type_complete_struct(DBCC_Type        *type,
-                                   size_t              n_members,
-                                   DBCC_Param         *members);
 void       dbcc_type_complete_union(DBCC_Type         *type,
                                    size_t              n_members,
                                    DBCC_Param         *members);
-/// note that only integer, enum_value, pointer types may be atomic
+
+// note that only integer, enum_value, pointer types may be atomic
 DBCC_Type *dbcc_type_new_atomic   (DBCC_Type          *non_atomic_type);
 
 bool  dbcc_cast_value (DBCC_Type  *dst_type,

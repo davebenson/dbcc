@@ -1,4 +1,7 @@
 
+#include "dbcc.h"
+#include "p-token.h"
+
 void *DBCC_Lemon_ParserAlloc(void *(*mallocProc)(size_t size));
 void DBCC_Lemon_ParserInit(void *yypParser);
 void DBCC_Lemon_Parser(

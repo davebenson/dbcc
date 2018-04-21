@@ -1,0 +1,118 @@
+
+%name DBCC_CPPExpr_Evaluator
+%include {
+#include "cpp-expr-number.h"
+#define IS_INT64(num) ((num).type == CPP_EXPR_NUMBER_INT64)
+#define BOTH_INT64(num1,num2)  ( IS_INT64(num1) && IS_INT64(num2) )
+#define MK_INT64(v)      ((CPP_Expr_Number) { .type = CPP_EXPR_NUMBER_INT64, .v_int64 = (v); })
+#define MK_DOUBLE(v)     ((CPP_Expr_Number) { .type = CPP_EXPR_NUMBER_DOUBLE, .v_double = (v); })
+#define GET_DOUBLE(v)    (((v).type == CPP_EXPR_NUMBER_DOUBLE) ? (v).v_double : (double)((v).v_int64))
+#define MK_FAIL()        ((CPP_Expr_Number) { .type = CPP_EXPR_NUMBER_FAIL; })
+}
+
+%token CPP_Expr_Number
+
+
+value(out) ::= NUMBER(n).
+        { out = n; }
+value(out) ::= IDENTIFIER.
+        { out = MK_INT64(0); }
+value(out) ::= value(a) STAR value(b).
+        { out = MK_INT64(a.v_int64 * b.v_int64); }
+value(out) ::= value(a) SLASH value(b).
+        { if (EITHER_FAIL(a, b))
+            out = MK_FAIL();
+          else
+            out = MK_INT64(a.v_int64 / b.v_int64); }
+value(out) ::= value(a) PERCENT value(b).
+        { if (EITHER_FAIL(a, b))
+            out = MK_FAIL();
+          else if (b.v_int64 == 0)
+            out = MK_FAIL();
+          else
+            out = MK_INT64(a.v_int64 % b.v_int64); }
+value(out) ::= value(a) PLUS value(b).
+        { if (EITHER_FAIL(a, b))
+            out = MK_FAIL();
+          else
+            out = MK_INT64(a.v_int64 + b.v_int64); }
+value(out) ::= value(a) MINUS value(b).
+        { if (EITHER_FAIL(a, b))
+            out = MK_FAIL();
+          else
+            out = MK_INT64(a.v_int64 - b.v_int64); }
+value(out) ::= value(a) GTGT value(b).
+        { if (EITHER_FAIL(a, b))
+            out = MK_FAIL();
+          else
+            out = MK_INT64(a.v_int64 >> b.v_int64);
+        }
+value(out) ::= value(a) LTLT value(b).
+        { if (EITHER_FAIL(a, b))
+            out = MK_FAIL();
+          else
+            out = MK_INT64(a.v_int64 << b.v_int64); }
+value(out) ::= value(a) GT value(b).
+        { if (EITHER_FAIL(a, b))
+            out = MK_FAIL();
+          else
+            out = MK_INT64(a.v_int64 > b.v_int64); }
+value(out) ::= value(a) LT value(b).
+        { if (EITHER_FAIL(a, b))
+            out = MK_FAIL();
+          else
+            out = MK_INT64(a.v_int64 < b.v_int64); }
+value(out) ::= value(a) GTEQ value(b).
+        { if (EITHER_FAIL(a, b))
+            out = MK_FAIL();
+          else
+            out = MK_INT64(a.v_int64 >= b.v_int64); }
+value(out) ::= value(a) LTEQ value(b).
+        { if (EITHER_FAIL(a, b))
+            out = MK_FAIL();
+          else
+            out = MK_INT64(a.v_int64 <= b.v_int64); }
+value(out) ::= value(a) EQ value(b).
+        { if (EITHER_FAIL(a, b))
+            out = MK_FAIL();
+          else
+            out = MK_INT64(a.v_int64 == b.v_int64); }
+value(out) ::= value(a) NEQ value(b).
+        { if (EITHER_FAIL(a, b))
+            out = MK_FAIL();
+          else
+            out = MK_INT64(a.v_int64 != b.v_int64); }
+value(out) ::= value(a) BITWISE_AND value(b).
+        { if (EITHER_FAIL(a, b))
+            out = MK_FAIL();
+          else
+            out = MK_INT64(a.v_int64 & b.v_int64); }
+value(out) ::= value(a) BITWISE_OR value(b).
+        { if (EITHER_FAIL(a, b))
+            out = MK_FAIL();
+          else
+            out = MK_INT64(a.v_int64 | b.v_int64); }
+value(out) ::= value(a) LOGICAL_AND value(b).
+        { if (a.type == CPP_EXPR_NUMBER_FAIL)
+            out = MK_FAIL();
+          else if (a.v_int64 == 0)
+            out = MK_INT64(0);
+          else
+            out = b; }
+value(out) ::= value(a) LOGICAL_OR value(b).
+        { if (a.type == CPP_EXPR_NUMBER_FAIL)
+            out = MK_FAIL();
+          else if (a.v_int64 != 0)
+            out = MK_INT64(1);
+          else
+            out = b; }
+value(out) ::= BANG value(in).
+        { if (in.type == CPP_EXPR_NUMBER_FAIL)
+            out = MK_FAIL();
+          else
+            out = MK_INT64(in.v_int64 == 0); }
+value(out) ::= BANG value(in).
+        { if (in.type == CPP_EXPR_NUMBER_FAIL)
+            out = MK_FAIL();
+          else
+            out = MK_INT64(~in.v_int64); }

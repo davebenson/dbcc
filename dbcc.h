@@ -1,3 +1,5 @@
+#ifndef __DBCC_H_
+#define __DBCC_H_
 
 typedef struct DBCC_Namespace DBCC_Namespace;
 typedef struct DBCC_Param DBCC_Param;
@@ -128,6 +130,7 @@ struct DBCC_Param
 #include "dbcc-statement.h"
 #include "dbcc-namespace.h"
 
+#if 0
 // The C Grammar we use defines a Declaration as a tricky beast with a list of "Declarators",
 // which are intended to generally handle reasonable cases like:
 //       int x,y,z;
@@ -141,9 +144,10 @@ struct DBCC_Param
 //       int (*z)(void*) = free;
 struct DBCC_Declaration
 {
-  DBCC_Type *type;
-  DBCC_Symbol *name;
+  DBCC_Param param;
   DBCC_Expr *init;              /* optional */
 };
+#endif
 
 
+#endif

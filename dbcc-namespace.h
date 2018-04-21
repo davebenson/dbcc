@@ -33,6 +33,12 @@ struct DBCC_Namespace
   DBCC_Namespace *chain;                /* if lookups fail, go to parent */
 };
 
+DBCC_Namespace *
+dbcc_namespace_new_global        (void);
+
+DBCC_Namespace *
+dbcc_namespace_new_scope         (void);
+
 bool
 dbcc_namespace_lookup            (DBCC_Namespace      *ns,
                                   DBCC_Symbol         *symbol,
@@ -55,11 +61,12 @@ void dbcc_namespace_add_by_tag   (DBCC_Namespace      *ns,
 void dbcc_namespace_add_enum_value (DBCC_Namespace *ns,
                                     DBCC_EnumValue *enum_value);
 
-DBCC_Type * dbcc_namespace_get_float_complex_type (DBCC_Namespace *ns);
-DBCC_Type * dbcc_namespace_get_double_complex_type (DBCC_Namespace *ns);
+/* Complex Types. TODO: spec ref */
+DBCC_Type * dbcc_namespace_get_float_complex_type     (DBCC_Namespace *ns);
+DBCC_Type * dbcc_namespace_get_double_complex_type    (DBCC_Namespace *ns);
 DBCC_Type * dbcc_namespace_get_long_double_complex_type (DBCC_Namespace *ns);
-DBCC_Type * dbcc_namespace_get_float_imaginary_type (DBCC_Namespace *ns);
-DBCC_Type * dbcc_namespace_get_double_imaginary_type (DBCC_Namespace *ns);
+DBCC_Type * dbcc_namespace_get_float_imaginary_type   (DBCC_Namespace *ns);
+DBCC_Type * dbcc_namespace_get_double_imaginary_type  (DBCC_Namespace *ns);
 DBCC_Type * dbcc_namespace_get_long_double_imaginary_type (DBCC_Namespace *ns);
 
 DBCC_Type * dbcc_namespace_get_char_type              (DBCC_Namespace *);

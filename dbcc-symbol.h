@@ -26,6 +26,12 @@ DBCC_INLINE DBCC_Symbol *dbcc_symbol_space_force (DBCC_SymbolSpace *space,
                                                   const char *str);
 DBCC_INLINE DBCC_Symbol *dbcc_symbol_space_try   (DBCC_SymbolSpace *space,
                                                   const char *str);
+DBCC_INLINE DBCC_Symbol *dbcc_symbol_space_force_len (DBCC_SymbolSpace *space,
+                                                  unsigned    len,
+                                                  const char *str);
+DBCC_INLINE DBCC_Symbol *dbcc_symbol_space_try_len   (DBCC_SymbolSpace *space,
+                                                  unsigned    len,
+                                                  const char *str);
 DBCC_INLINE const char  *dbcc_symbol_get_string  (const DBCC_Symbol *symbol);
   
 

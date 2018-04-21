@@ -1,3 +1,10 @@
+/* PRIVATE HEADER:
+ *   P_Token is a fully-preprocessed token (with string-literals joined).
+ *   P_Context contains references to the namespaces etc.
+ */
+#ifndef __DBCC_P_TOKEN_H_
+#define __DBCC_P_TOKEN_H_
+
 typedef struct P_Token P_Token;
 typedef struct P_Context P_Context;
 
@@ -26,3 +33,4 @@ struct P_Token
   DBCC_Type *type;
 };
 
+#endif
