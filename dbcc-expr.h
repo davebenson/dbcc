@@ -112,9 +112,13 @@ DBCC_Expr *dbcc_expr_new_string_constant  (DBCC_String        *constant);
 DBCC_Expr *dbcc_expr_new_enum_constant    (DBCC_EnumValue     *enum_value);
 DBCC_Expr *dbcc_expr_new_float_constant   (const char         *str,
                                            DBCC_Error        **error);
+DBCC_Expr *dbcc_expr_new_char_constant    (bool                is_long,
+                                           uint32_t            value);
 DBCC_Expr *dbcc_expr_new_unary            (DBCC_UnaryOperator  op,
                                            DBCC_Expr          *a);
 
+void       dbcc_expr_add_code_position    (DBCC_Expr          *expr,
+                                           DBCC_CodePosition  *cp);
 typedef enum
 {
   DBCC_DESIGNATOR_MEMBER,

@@ -10,8 +10,36 @@
 #define MK_FAIL()        ((CPP_Expr_Number) { .type = CPP_EXPR_NUMBER_FAIL; })
 }
 
-%token CPP_Expr_Number
+%token_type {CPP_Expr_Number}
+%token_prefix {CPP_EXPR_}
+%start_symbol evaluated_expression
+%type value {CPP_Expr_Number}
+%type evaluated_expression {CPP_Expr_Number}
+%extra_argument {CPP_Expr_Result *result}
 
+%left LTLT GTGT.
+%left LOGICAL_OR.
+%left LOGICAL_AND.
+%left BITWISE_OR.
+%left BITWISE_AND.
+%left PLUS MINUS.
+%left STAR SLASH PERCENT.
+%left BANG TILDE.
+%nonassoc GT GTEQ LT LTEQ EQ NEQ.
+
+
+evaluated_expression(out) ::= value(in).
+        { out = in;
+          switch (in.type)
+            {
+            case CPP_EXPR_NUMBER_FAIL:
+              result->bool_result = false;
+              break;
+            case CPP_EXPR_NUMBER_INT64:
+              result->bool_result = (in.v_int64 != 0);
+              break;
+            }
+        }
 
 value(out) ::= NUMBER(n).
         { out = n; }
@@ -111,8 +139,11 @@ value(out) ::= BANG value(in).
             out = MK_FAIL();
           else
             out = MK_INT64(in.v_int64 == 0); }
-value(out) ::= BANG value(in).
+value(out) ::= TILDE value(in).
         { if (in.type == CPP_EXPR_NUMBER_FAIL)
             out = MK_FAIL();
           else
             out = MK_INT64(~in.v_int64); }
+
+value(out) ::= LPAREN value(in) RPAREN.
+        { out = in; }

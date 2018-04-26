@@ -1949,6 +1949,10 @@ primary_expression(rv) ::= ENUMERATION_CONSTANT(c).
             assert(0);
           assert(ns_entry.entry_type == DBCC_NAMESPACE_ENTRY_ENUM_VALUE);
           rv = dbcc_expr_new_enum_constant (ns_entry.v_enum_value); }
+primary_expression(rv) ::= CHAR_CONSTANT(c).
+        { rv = dbcc_expr_new_char_constant (c.i_value >= 0x100, c.i_value);             // XXX: is_long not remotely correct
+          dbcc_expr_add_code_position (rv, c.code_position);
+        }
 primary_expression(rv) ::= string(s).
         { rv = dbcc_expr_new_string_constant (&s);
           s.str = NULL; }
@@ -2035,15 +2039,15 @@ postfix_expression(rv) ::= postfix_expression(head) LPAREN argument_expression_l
             }
           rv = dbcc_expr_new_call (head, count, args); }
 
-postfix_expression(rv) ::= postfix_expression(head) DOT IDENTIFIER(id).
+postfix_expression(rv) ::= postfix_expression(head) PERIOD IDENTIFIER(id).
         { rv = dbcc_expr_new_member_access(head, id.symbol);
         }
 
-postfix_expression(rv) ::= postfix_expression(head) PTR_OP IDENTIFIER(id).
+postfix_expression(rv) ::= postfix_expression(head) POINTER_ACCESS IDENTIFIER(id).
         { rv = dbcc_expr_new_pointer_access (head, id.symbol); }
-postfix_expression(rv) ::= postfix_expression(expr) INC_OP.
+postfix_expression(rv) ::= postfix_expression(expr) INCREMENT.
         { rv = dbcc_expr_new_inplace_unary(DBCC_INPLACE_UNARY_OPERATOR_POST_INCR, expr); }
-postfix_expression(rv) ::= postfix_expression(expr) DEC_OP.
+postfix_expression(rv) ::= postfix_expression(expr) DECREMENT.
         { rv = dbcc_expr_new_inplace_unary(DBCC_INPLACE_UNARY_OPERATOR_POST_DECR, expr); }
 postfix_expression(rv) ::= LPAREN type_name(type) RPAREN LBRACE initializer_list(list) optional_comma RBRACE.
         { DBCC_StructuredInitializer sinit;
@@ -2119,19 +2123,19 @@ additive_expression(rv) ::= additive_expression(a) MINUS multiplicative_expressi
 
 shift_expression(rv) ::= additive_expression(expr).
         { rv = expr; expr = NULL; }
-shift_expression(rv) ::= shift_expression(a) LEFT_OP additive_expression(b).
+shift_expression(rv) ::= shift_expression(a) SHIFT_LEFT additive_expression(b).
         { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_SHIFT_LEFT, a, b);
           a = b = NULL; }
-shift_expression(rv) ::= shift_expression(a) RIGHT_OP additive_expression(b).
+shift_expression(rv) ::= shift_expression(a) SHIFT_RIGHT additive_expression(b).
         { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_SHIFT_RIGHT, a, b);
           a = b = NULL; }
 
 relational_expression(rv) ::= shift_expression(expr).
         { rv = expr; expr = NULL; }
-relational_expression(rv) ::= relational_expression(a) LT shift_expression(b).
+relational_expression(rv) ::= relational_expression(a) LESS_THAN shift_expression(b).
         { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_LT, a, b);
           a = b = NULL; }
-relational_expression(rv) ::= relational_expression(a) GT shift_expression(b).
+relational_expression(rv) ::= relational_expression(a) GREATER_THAN shift_expression(b).
         { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_GT, a, b);
           a = b = NULL; }
 relational_expression(rv) ::= relational_expression(a) LE shift_expression(b).
@@ -2143,10 +2147,12 @@ relational_expression(rv) ::= relational_expression(a) GE shift_expression(b).
 
 equality_expression(rv) ::= relational_expression(expr).
         { rv = expr; expr = NULL; }
-equality_expression(rv) ::= equality_expression(a) EQ_OP relational_expression(b).
+// example: a == b
+equality_expression(rv) ::= equality_expression(a) IS_EQUAL_TO relational_expression(b).
         { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_EQ, a, b);
           a = b = NULL; }
-equality_expression(rv) ::= equality_expression(a) NE_OP relational_expression(b).
+// example: a != b
+equality_expression(rv) ::= equality_expression(a) NOT_EQUAL_TO relational_expression(b).
         { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_NE, a, b);
           a = b = NULL; }
 
@@ -2170,13 +2176,13 @@ inclusive_or_expression(rv) ::= inclusive_or_expression(a) VERTICAL_BAR exclusiv
 
 logical_and_expression(rv) ::= inclusive_or_expression(expr).
         { rv = expr; expr = NULL; }
-logical_and_expression(rv) ::= logical_and_expression(a) AND_OP inclusive_or_expression(b).
+logical_and_expression(rv) ::= logical_and_expression(a) LOGICAL_AND inclusive_or_expression(b).
         { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_LOGICAL_AND, a, b);
           a = b = NULL; }
 
 logical_or_expression(rv) ::= logical_and_expression(expr).
         { rv = expr; expr = NULL; }
-logical_or_expression(rv) ::= logical_or_expression(a) OR_OP logical_and_expression(b).
+logical_or_expression(rv) ::= logical_or_expression(a) LOGICAL_OR logical_and_expression(b).
         { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_LOGICAL_OR, a, b);
           a = b = NULL; }
 
@@ -2191,27 +2197,27 @@ assignment_expression(rv) ::= conditional_expression(expr).
 assignment_expression(rv) ::= unary_expression(a) assignment_operator(op) assignment_expression(b).
 	{ rv = dbcc_expr_new_inplace_binary (op, a, b); }
 
-assignment_operator(rv) ::= EQUALS.
+assignment_operator(rv) ::= EQUAL_SIGN.
         { rv = DBCC_INPLACE_BINARY_OPERATOR_ASSIGN; }
-assignment_operator(rv) ::= MUL_ASSIGN.
+assignment_operator(rv) ::= MULTIPLY_ASSIGN.
         { rv = DBCC_INPLACE_BINARY_OPERATOR_MUL_ASSIGN; }
-assignment_operator(rv) ::= DIV_ASSIGN.
+assignment_operator(rv) ::= DIVIDE_ASSIGN.
         { rv = DBCC_INPLACE_BINARY_OPERATOR_DIV_ASSIGN; }
-assignment_operator(rv) ::= REM_ASSIGN.
+assignment_operator(rv) ::= REMAINDER_ASSIGN.
         { rv = DBCC_INPLACE_BINARY_OPERATOR_REM_ASSIGN; }
 assignment_operator(rv) ::= ADD_ASSIGN.
         { rv = DBCC_INPLACE_BINARY_OPERATOR_ADD_ASSIGN; }
-assignment_operator(rv) ::= SUB_ASSIGN.
+assignment_operator(rv) ::= SUBTRACT_ASSIGN.
         { rv = DBCC_INPLACE_BINARY_OPERATOR_SUB_ASSIGN; }
-assignment_operator(rv) ::= LEFT_SHIFT_ASSIGN.
+assignment_operator(rv) ::= SHIFT_LEFT_ASSIGN.
         { rv = DBCC_INPLACE_BINARY_OPERATOR_LEFT_SHIFT_ASSIGN; }
-assignment_operator(rv) ::= RIGHT_SHIFT_ASSIGN.
+assignment_operator(rv) ::= SHIFT_RIGHT_ASSIGN.
         { rv = DBCC_INPLACE_BINARY_OPERATOR_RIGHT_SHIFT_ASSIGN; }
-assignment_operator(rv) ::= AND_ASSIGN.
+assignment_operator(rv) ::= BITWISE_AND_ASSIGN.
         { rv = DBCC_INPLACE_BINARY_OPERATOR_AND_ASSIGN; }
-assignment_operator(rv) ::= XOR_ASSIGN.
+assignment_operator(rv) ::= BITWISE_XOR_ASSIGN.
         { rv = DBCC_INPLACE_BINARY_OPERATOR_XOR_ASSIGN; }
-assignment_operator(rv) ::= OR_ASSIGN.
+assignment_operator(rv) ::= BITWISE_OR_ASSIGN.
         { rv = DBCC_INPLACE_BINARY_OPERATOR_OR_ASSIGN; }
 
 expression(rv) ::= assignment_expression(expr).
@@ -2759,7 +2765,7 @@ designator_list(rv) ::= designator_list(in) designator(d).
 designator(rv) ::= LBRACKET constant_expression(index) RBRACKET.
         { rv = p_designator_new_array_index (index);
           index = NULL; }
-designator(rv) ::= DOT IDENTIFIER(id).
+designator(rv) ::= PERIOD IDENTIFIER(id).
         { rv = p_designator_new_struct_member (id.symbol); }
 
 static_assert_declaration(decl) ::= STATIC_ASSERT LPAREN constant_expression(expr) COMMA STRING_LITERAL(explanation) RPAREN SEMICOLON.

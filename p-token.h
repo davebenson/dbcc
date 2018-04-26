@@ -31,6 +31,12 @@ struct P_Token
   // only used for the following token types:
   //     TYPEDEF_NAME
   DBCC_Type *type;
+
+  // for CHAR_CONSTANT
+  uint32_t i_value;
 };
+
+#define P_TOKEN_INIT(shortname, cp) \
+  (P_Token) { (cp), P_TOKEN_##shortname, NULL, {0,NULL}, NULL, 0 }
 
 #endif

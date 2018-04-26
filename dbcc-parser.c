@@ -35,10 +35,14 @@
 
 #include "dbcc.h"
 #include "dbcc-dsk.h"
+#include "dbcc-common.h"
 #include "dbcc-parser.h"
 #include "dbcc-parser-lemon.h"
+#include "dbcc-parser-p.h"
 #include "p-token.h"
 #include "dsk/dsk-rbtree-macros.h"
+#include "cpp-expr-number.h"
+#include "cpp-expr-evaluate-p.h"
 #include <ctype.h>
 #include <stdio.h>
 
@@ -51,6 +55,12 @@
  * operators, quoted strings and characters, etc.)
  */
 #define SUPPORT_TRIGRAPHS 0
+
+/* Hackery used to implement lexing two-character combos with switch statements.
+ * Combines two ASCII characters into an integer.
+ */
+#define COMBINE_2_CHARS(a,b)   ((((a) & 0xff) << 8) | ((b) & 0xff))
+
 
 typedef enum
 {
@@ -168,6 +178,7 @@ struct CPP_Expr
   size_t n_tokens;
   CPP_Token *tokens;
 };
+static CPP_Expr *copy_cpp_expr_densely (CPP_Expr *expr);
 
 struct DBCC_Parser
 {
@@ -965,7 +976,8 @@ parse_cpp_expr (unsigned n_tokens,
 {
   /* look for newline token */
   CPP_Token *t = tokens;
-  if (t->length == 2 && memcmp (t->str, "if", 2) == 0)
+  if ((t->length == 2 && memcmp (t->str, "if", 2) == 0)
+   || (t->length == 4 && memcmp (t->str, "elif", 4) == 0))
     expr->expr_type = CPP_EXPR_IF;
   else if (t->length == 5 && memcmp (t->str, "ifdef", 2) == 0)
     expr->expr_type = CPP_EXPR_IFDEF;
@@ -1381,13 +1393,143 @@ expand_macros (DBCC_Parser *parser,
  * the list of tokens should consist of the operators:
  *       * / = % & | && || ! ~ == != < <= > >=
  * as well as numbers, parentheses.
+ *
+ * The semantics of these expressions is given in Section 6.6.
  */
 static bool
-tokens_to_boolean_value (DBCC_Parser *parser,
-                         unsigned     n_tokens,
-                         CPP_Token   *tokens)
+tokens_to_boolean_value (unsigned     n_tokens,
+                         CPP_Token   *tokens,
+                         bool        *result_out,
+                         DBCC_Error **error)
 {
-  ...
+  void *lemon_parser = DBCC_CPPExpr_EvaluatorAlloc(malloc);
+  unsigned i;
+  CPP_EvalParserResult eval_result = CPP_EVAL_PARSER_RESULT_INIT;
+  for (i = 0; i < n_tokens; i++)
+    {
+      CPP_Expr_Result res = { CPP_EXPR_RESULT_INT64, .v_int64 = 0 };
+      switch (tokens[i].type)
+        {
+        case CPP_TOKEN_CHAR:
+          {
+            uint32_t v;
+            if (!dbcc_common_char_constant_value (tokens[i].length,
+                                                  tokens[i].str,
+                                                  &v,
+                                                  error))
+              {
+                dbcc_error_add_code_position (*error, tokens[i].code_position);
+                return false;
+              }
+            res.v_int64 = v;
+            DBCC_CPPExpr_Evaluator(lemon_parser, CPP_EXPR_NUMBER, res, &eval_result);
+          }
+          break;
+        case CPP_TOKEN_NUMBER:
+          {
+            int64_t val;
+            if (!dbcc_common_number_is_integral (tokens[i].length, tokens[i].str))
+              {
+                *error = dbcc_error_new (DBCC_ERROR_PREPROCESSOR_INTEGERS_ONLY,
+                                         "preprocessor will not handle floating-point number");
+                dbcc_error_add_code_position (*error, tokens[i].code_position);
+                return false;
+              }
+            else if (!dbcc_common_number_parse_int64 (tokens[i].length, tokens[i].str, &val, error))
+              {
+                dbcc_error_add_code_position (*error, tokens[i].code_position);
+                return false;
+              }
+            else
+              {
+                res.v_int64 = val;
+                DBCC_CPPExpr_Evaluator(lemon_parser, CPP_TOKEN_NUMBER, res, &eval_result);
+              }
+            break;
+          }
+        case CPP_TOKEN_OPERATOR:
+          {
+            int et;
+            switch (tokens[i].length)
+              {
+              case 1:
+                switch (tokens[i].str[0])
+                  {
+                  case '|': et = CPP_EXPR_BITWISE_OR; break;
+                  case '&': et = CPP_EXPR_BITWISE_AND; break;
+                  case '+': et = CPP_EXPR_PLUS; break;
+                  case '-': et = CPP_EXPR_MINUS; break;
+                  case '*': et = CPP_EXPR_STAR; break;
+                  case '/': et = CPP_EXPR_SLASH; break;
+                  case '%': et = CPP_EXPR_PERCENT; break;
+                  case '!': et = CPP_EXPR_BANG; break;
+                  case '~': et = CPP_EXPR_TILDE; break;
+                  case '<': et = CPP_EXPR_LT; break;
+                  case '>': et = CPP_EXPR_GT; break;
+                  case '(': et = CPP_EXPR_LPAREN; break;
+                  case ')': et = CPP_EXPR_RPAREN; break;
+                  default: goto invalid_operator;
+                  }
+                break;
+              case 2:
+                switch (COMBINE_2_CHARS(tokens[i].str[0], tokens[i].str[1]))
+                  {
+                  case COMBINE_2_CHARS('<', '<'): et = CPP_EXPR_LTLT; break;
+                  case COMBINE_2_CHARS('>', '>'): et = CPP_EXPR_GTGT; break;
+                  case COMBINE_2_CHARS('&', '&'): et = CPP_EXPR_LOGICAL_AND; break;
+                  case COMBINE_2_CHARS('|', '|'): et = CPP_EXPR_LOGICAL_OR; break;
+                  case COMBINE_2_CHARS('<', '='): et = CPP_EXPR_LTEQ; break;
+                  case COMBINE_2_CHARS('>', '='): et = CPP_EXPR_GTEQ; break;
+                  case COMBINE_2_CHARS('=', '='): et = CPP_EXPR_EQ; break;
+                  case COMBINE_2_CHARS('!', '='): et = CPP_EXPR_NEQ; break;
+                  default: goto invalid_operator;
+                  }
+              default: goto invalid_operator;
+              }
+            break;
+          }
+
+        case CPP_TOKEN_OPERATOR_DIGRAPH:
+          // None of the allowed operators are digraphs.
+          goto invalid_operator;
+
+        case CPP_TOKEN_BAREWORD:
+          DBCC_CPPExpr_Evaluator(lemon_parser, CPP_EXPR_IDENTIFIER, res, &eval_result);
+          break;
+
+        default:
+          *error = dbcc_error_new (DBCC_ERROR_PREPROCESSOR_INTERNAL,
+                                   "unexpected token-type should not have reached here (%u)",
+                                   tokens[i].type);
+          dbcc_error_add_code_position (*error, tokens[i].code_position);
+          return false;
+        }
+    }
+
+  // end parsing
+  CPP_Expr_Result res = { CPP_EXPR_RESULT_INT64, .v_int64 = 0 };
+  DBCC_CPPExpr_Evaluator(lemon_parser, 0, res, &eval_result);
+  if (res.type == CPP_EXPR_RESULT_FAIL)
+    {
+      *error = res.v_error;
+      return false;
+    }
+  if (eval_result.error != NULL)
+    {
+      *error = eval_result.error;
+      return false;
+    }
+  assert(eval_result.finished);
+  DBCC_CPPExpr_EvaluatorFree(lemon_parser, free);
+  *result_out = eval_result.bool_result;
+  return true;
+
+
+invalid_operator:
+  *error = dbcc_error_new (DBCC_ERROR_PREPROCESSOR_INVALID_OPERATOR,
+                           "not a valid operator in a preprocessor subexpression");
+  dbcc_error_add_code_position (*error, tokens[i].code_position);
+  return false;
 }
 
 static bool
@@ -1404,7 +1546,7 @@ eval_cpp_expr_boolean (DBCC_Parser *parser,
     case CPP_EXPR_IFNDEF:
       assert(expr->n_tokens == 1);
       assert(expr->tokens[0].type == CPP_TOKEN_BAREWORD);
-      kw = dbcc_symbol_space_force (parser->token_space,
+      kw = dbcc_symbol_space_force_len (parser->symbol_space,
                                     expr->tokens[0].length,
                                     expr->tokens[0].str);
       *result_out = lookup_macro (parser, kw) == NULL;
@@ -1413,28 +1555,190 @@ eval_cpp_expr_boolean (DBCC_Parser *parser,
     case CPP_EXPR_IFDEF:
       assert(expr->n_tokens == 1);
       assert(expr->tokens[0].type == CPP_TOKEN_BAREWORD);
-      kw = dbcc_symbol_space_force (parser->token_space,
+      kw = dbcc_symbol_space_force_len (parser->symbol_space,
                                     expr->tokens[0].length,
                                     expr->tokens[0].str);
-      *result_out = ! lookup_macro (parser, kw) == NULL;
+      *result_out = lookup_macro (parser, kw) != NULL;
       return true;
 
     case CPP_EXPR_IF:
       break;
     }
 
-  // handle 'defined(Keyword)', because we must handle it before macro expansion.
-  ...
+  // Handle 'defined(Keyword)' (parens are optional),
+  // because we must handle it before macro expansion.
+  unsigned i;
+  for (i = 0; i < expr->n_tokens; )
+    {
+      if (expr->tokens[i].type == CPP_TOKEN_BAREWORD
+       && expr->tokens[i].length == 7
+       && memcmp (expr->tokens[i].str, "defined", 7) == 0)
+        {
+          if (i + 3 < expr->n_tokens 
+           && expr->tokens[i+1].type == CPP_TOKEN_OPERATOR
+           && expr->tokens[i+1].length == 1
+           && expr->tokens[i+1].str[0] == '('
+           && expr->tokens[i+2].type == CPP_TOKEN_BAREWORD
+           && expr->tokens[i+3].type == CPP_TOKEN_OPERATOR
+           && expr->tokens[i+3].length == 1
+           && expr->tokens[i+3].str[0] == ')')
+            {
+              DBCC_Symbol *s = dbcc_symbol_space_try_len (parser->symbol_space, expr->tokens[i+2].length, expr->tokens[i+2].str);
+              bool val = (s != NULL && lookup_macro (parser, s) != NULL);
+              CPP_Token replace = {
+                CPP_TOKEN_NUMBER,
+                expr->tokens[i+2].code_position,
+                val ? "1" : "0",
+                1,
+                0
+              };
+              dbcc_code_position_unref (expr->tokens[i].code_position);
+              dbcc_code_position_unref (expr->tokens[i+1].code_position);
+              dbcc_code_position_unref (expr->tokens[i+3].code_position);
+              expr->tokens[i] = replace;
+              memmove (expr->tokens + i + 1,
+                       expr->tokens + i + 4,
+                       (expr->n_tokens - i - 4) * sizeof (CPP_Token));
+              expr->n_tokens -= 3;
+            }
+          else if (i + 1 < expr->n_tokens
+            && expr->tokens[i+1].type == CPP_TOKEN_BAREWORD)
+            {
+              DBCC_Symbol *s = dbcc_symbol_space_try_len (parser->symbol_space, expr->tokens[i+1].length, expr->tokens[i+1].str);
+              bool val = (s != NULL && lookup_macro (parser, s) != NULL);
+              CPP_Token replace = {
+                CPP_TOKEN_NUMBER,
+                expr->tokens[i+1].code_position,
+                val ? "1" : "0",
+                1,
+                0
+              };
+              dbcc_code_position_unref (expr->tokens[i].code_position);
+              expr->tokens[i] = replace;
+              memmove (expr->tokens + i + 1,
+                       expr->tokens + i + 2,
+                       (expr->n_tokens - i - 2) * sizeof (CPP_Token));
+              expr->n_tokens -= 1;
+            }
+          else
+            {
+              *error_out = dbcc_error_new (DBCC_ERROR_PREPROCESSOR_SYNTAX,
+                                       "expected identifier after 'defined' in preprocessor expression");
+              dbcc_error_add_code_position (*error_out, expr->tokens[i].code_position);
+              return false;
+            }
+        }
+      else
+        i++;
+    }
 
-  res = expand_macros (parser, ..., ...);
-  switch (res)
+  res = expand_macros (parser, expr->n_tokens, expr->tokens);
+  unsigned n_tokens;
+  CPP_Token *tokens;
+  switch (res.type)
     {
       case CPP_MACRO_EXPANSION_RESULT_NO_CHANGE:
-        ...
+        n_tokens = expr->n_tokens;
+        tokens = expr->tokens;
+        break;
+
       case CPP_MACRO_EXPANSION_RESULT_SUCCESS:
-        ...
+        n_tokens = res.v_success.n_expanded_tokens;
+        tokens = res.v_success.expanded_tokens;
+        break;
+
       case CPP_MACRO_EXPANSION_RESULT_ERROR:
-        ...
+        *error_out = res.v_error.error;
+        return false;
+    }
+  bool rv = tokens_to_boolean_value (n_tokens, tokens, result_out, error_out);
+  return rv;
+}
+
+
+static bool
+convert_cpp_token_operator_to_ptokentype (CPP_Token   *token,
+                                          int         *token_type_out,
+                                          DBCC_Error **error)
+{
+  switch (token->length)
+    {
+    case 1:
+      switch (token->str[0])
+        {
+        case '(': *token_type_out = P_TOKEN_LPAREN; return true;
+        case ')': *token_type_out = P_TOKEN_RPAREN; return true;
+        case '{': *token_type_out = P_TOKEN_LBRACE; return true;
+        case '}': *token_type_out = P_TOKEN_RBRACE; return true;
+        case '[': *token_type_out = P_TOKEN_LBRACKET; return true;
+        case ']': *token_type_out = P_TOKEN_RBRACKET; return true;
+        case '<': *token_type_out = P_TOKEN_LESS_THAN; return true;
+        case '>': *token_type_out = P_TOKEN_GREATER_THAN; return true;
+        case '!': *token_type_out = P_TOKEN_EXCLAMATION_POINT; return true;
+        case '%': *token_type_out = P_TOKEN_PERCENT; return true;
+        case '^': *token_type_out = P_TOKEN_CARAT; return true;
+        case '&': *token_type_out = P_TOKEN_AMPERSAND; return true;
+        case '*': *token_type_out = P_TOKEN_ASTERISK; return true;
+        case '|': *token_type_out = P_TOKEN_VERTICAL_BAR; return true;
+        case ';': *token_type_out = P_TOKEN_SEMICOLON; return true;
+        case ',': *token_type_out = P_TOKEN_COLON; return true;
+        case '.': *token_type_out = P_TOKEN_PERIOD; return true;
+        case '/': *token_type_out = P_TOKEN_SLASH; return true;
+        case '?': *token_type_out = P_TOKEN_QUESTION_MARK; return true;
+        case '+': *token_type_out = P_TOKEN_PLUS; return true;
+        case '-': *token_type_out = P_TOKEN_MINUS; return true;
+        case '=': *token_type_out = P_TOKEN_EQUAL_SIGN; return true;
+        case '~': *token_type_out = P_TOKEN_TILDE; return true;
+        }
+      goto not_a_smooth_operator;
+
+    case 2:
+      switch (COMBINE_2_CHARS(token->str[0], token->str[1]))
+        {
+        // comparison operators
+        case COMBINE_2_CHARS('<', '<'): *token_type_out = P_TOKEN_SHIFT_LEFT; return true;
+        case COMBINE_2_CHARS('>', '>'): *token_type_out = P_TOKEN_SHIFT_RIGHT; return true;
+        case COMBINE_2_CHARS('!', '='): *token_type_out = P_TOKEN_NOT_EQUAL_TO; return true;
+        case COMBINE_2_CHARS('=', '='): *token_type_out = P_TOKEN_IS_EQUAL_TO; return true;
+
+        // increment/decrement
+        case COMBINE_2_CHARS('-', '-'): *token_type_out = P_TOKEN_INCREMENT; return true;
+        case COMBINE_2_CHARS('+', '+'): *token_type_out = P_TOKEN_DECREMENT; return true;
+
+        // 2-character assignment operator
+        case COMBINE_2_CHARS('*', '='): *token_type_out = P_TOKEN_MULTIPLY_ASSIGN; return true;
+        case COMBINE_2_CHARS('/', '='): *token_type_out = P_TOKEN_DIVIDE_ASSIGN; return true;
+        case COMBINE_2_CHARS('+', '='): *token_type_out = P_TOKEN_ADD_ASSIGN; return true;
+        case COMBINE_2_CHARS('-', '='): *token_type_out = P_TOKEN_SUBTRACT_ASSIGN; return true;
+        case COMBINE_2_CHARS('%', '='): *token_type_out = P_TOKEN_REMAINDER_ASSIGN; return true;
+        case COMBINE_2_CHARS('^', '='): *token_type_out = P_TOKEN_BITWISE_XOR_ASSIGN; return true;
+        case COMBINE_2_CHARS('|', '='): *token_type_out = P_TOKEN_BITWISE_OR_ASSIGN; return true;
+        case COMBINE_2_CHARS('&', '='): *token_type_out = P_TOKEN_BITWISE_AND_ASSIGN; return true;
+        }
+      goto not_a_smooth_operator;
+
+    case 3:
+      if (memcmp (token->str, "<<=" , 3) == 0)
+        {
+          *token_type_out = P_TOKEN_SHIFT_LEFT_ASSIGN;
+          return true;
+        }
+      else if (memcmp (token->str, ">>=" , 3) == 0)
+        {
+          *token_type_out = P_TOKEN_SHIFT_RIGHT_ASSIGN;
+          return true;
+        }
+      else
+        goto not_a_smooth_operator;
+
+    not_a_smooth_operator:              // haha: bad operator error
+    default:
+      *error = dbcc_error_new (DBCC_ERROR_BAD_OPERATOR,
+                               "unrecognized operator '%.*s' found",
+                               (int) token->length,
+                               token->str);
+      dbcc_error_add_code_position (*error, token->code_position);
+      return false;
     }
 }
 
@@ -1442,11 +1746,75 @@ typedef enum
 {
   CPP_STACK_INACTIVE_PARENT,
 
-  CPP_STACK_INACTIVE,           // parent active, child inactive
-  CPP_STACK_INACTIVE_FOR_ALL_IFS,
+  CPP_STACK_INACTIVE_SO_FAR,           // parent active, child inactive
+  CPP_STACK_INACTIVE_BUT_HAS_BEEN_ACTIVE,
   CPP_STACK_ACTIVE,
+
+  // in else clause - so another #else is not allowed
+  CPP_STACK_ACTIVE_ELSE,
+  CPP_STACK_INACTIVE_BUT_HAS_BEEN_ACTIVE_ELSE,
 } CPP_StackFrameStatus;
 
+static inline bool
+is_active_cpp_stack_state (CPP_StackFrameStatus status)
+{
+  return status == CPP_STACK_ACTIVE || status == CPP_STACK_ACTIVE_ELSE;
+}
+
+static bool
+is_whitespace (const char *str, const char *end)
+{
+  const char *at = str;
+  while (at < end && isspace (*at))
+    at++;
+  return at == end;
+}
+
+/* Handle #line directive.
+ * See 6.10.4.  Line Control.
+ */
+static void
+scan_maybe_hash_line (DBCC_Parser *parser,
+                      const char *str,
+                      const char *endline,
+                      DBCC_Symbol **filename_symbol_inout,
+                      unsigned   *lineno_inout,
+                      unsigned   *column_inout)
+{
+  assert(*str == '#');
+  str++;
+  while (str < endline && isspace (*str))
+    str++;
+  if (str == endline)
+    return;
+  if (memcmp (str, "line", 4) != 0)
+    return;
+
+  /* Skip "line" and following space */
+  str += 4;
+  while (str < endline && isspace (*str))
+    str++;
+
+  /* Parse line number */
+  char *end_number;
+  *lineno_inout = strtoul (str, &end_number, 10);
+  *column_inout = 1;
+  str = end_number;
+
+  /* Optional filename (in quotes) */
+  while (str < endline && isspace (*str))
+    str++;
+  if (*str == '"')
+    {
+      str++;
+      const char *end = memchr (str, '"', endline - str);
+      if (end == NULL)
+        return;
+      DBCC_Symbol *sym = dbcc_symbol_space_force_len (parser->symbol_space,
+                                                      end - str, str);
+      *filename_symbol_inout = sym;
+    }
+}
 bool
 dbcc_parser_parse_file      (DBCC_Parser   *parser,
                              const char    *filename)
@@ -1462,6 +1830,12 @@ dbcc_parser_parse_file      (DBCC_Parser   *parser,
       parser->handlers.handle_error (e, parser->handler_data);
       return false;
     }
+
+  unsigned preproc_conditional_stack_alloced = 32;
+  CPP_StackFrameStatus *preproc_conditional_stack = malloc (sizeof (CPP_StackFrameStatus) * preproc_conditional_stack_alloced);
+  unsigned preproc_conditional_level = 0;
+#define PREPROC_TOP   preproc_conditional_stack[preproc_conditional_level-1]
+#define PREPROC_NEXT_TOP   preproc_conditional_stack[preproc_conditional_level]
   
   /* Step 1: convert file into a sequence of "preprocessor tokens".
    * These tokens "point into" the raw file contents, to minimize extra copies.
@@ -1489,12 +1863,27 @@ dbcc_parser_parse_file      (DBCC_Parser   *parser,
   } while(0)
 #define APPEND_CPP_TOKEN(typeshort, cp, str, length)                    \
   APPEND_TOKEN(CPP_TOKEN(typeshort, cp, str, length))
+  const char *last_newline = NULL;
   while (str < end)
     {
+      const char *end_line = memchr (str, '\n', end - str);
+      if (end_line == NULL)
+        {
+          DBCC_Error *error = dbcc_error_new (DBCC_ERROR_PREPROCESSOR_INCOMPLETE_LINE,
+                                              "line without terminating newline");
+          parser->handlers.handle_error (error, parser->handler_data);
+          return false;
+        }
       while (str < end && *str != '\n')
         {
           if (*str == '#')
             {
+              if (last_newline == NULL || is_whitespace (last_newline+1, str))
+                {
+                  scan_maybe_hash_line (parser, str, end_line,
+                                        &filename_symbol,
+                                        &line_no, &column);
+                }
               /* handle preprocessor directive. */
               APPEND_TOKEN(CPP_TOKEN(
                 HASH,
@@ -1695,6 +2084,7 @@ dbcc_parser_parse_file      (DBCC_Parser   *parser,
             1
           );
           column = 1;
+          last_newline = str;
           line_no++;
           str++;
         }
@@ -1727,50 +2117,24 @@ dbcc_parser_parse_file      (DBCC_Parser   *parser,
   // This will be set true if there is an #if/#ifdef/#ifndef at start of file,
   // and there are no #else/#elif's at top-level, and there is nothing
   // after the final #endif
-  bool guarded = false;
+  CPP_Expr *guard = NULL;
+  bool is_first = true;
+  bool past_last_endif = false;
+  
   unsigned at = 0;
-  while (at < n_cpp_tokens && cpp_tokens[at].type == CPP_TOKEN_NEWLINE)
-    at++;
 
-  CPP_Expr guard_expr;
+#define EMIT_PTOKEN_TO_PARSER(token) \
+  do{ \
+    DBCC_Lemon_Parser(parser->lemon_parser, \
+                      (token).token_type, token, \
+                      parser->context); \
+  }while(0)
 
-  if (n_cpp_tokens >= 5
-   && cpp_tokens[at].type == CPP_TOKEN_HASH
-   && cpp_tokens[at+1].type == CPP_TOKEN_BAREWORD
-   && is_if_like_directive_identifier (cpp_tokens + at + 1))
-    {
-      CPP_Expr cpp_expr;
-      DBCC_Error *error = NULL;
-      guarded = true;
-      unsigned n_expr_tokens = parse_cpp_expr (n_cpp_tokens - at - 1,
-                                               cpp_tokens + at + 1,
-                                               &guard_expr, &error);
-      if (n_expr_tokens == 0)
-        {
-          parser->handlers.handle_error (error, parser->handler_data);
-          return false;
-        }
-      at += n_expr_tokens + 2;  /* expression tokens plus '#' and if/ifdef/ifndef */
-
-      /* evaluate expr to see if we are live */
-      if (!eval_cpp_expr_boolean (parser, &guard_expr, &result, &error))
-        {
-          parser->handlers.handle_error (error, parser->handler_data);
-          return false;
-        }
-
-      stack_statuses[0] = result ? CPP_STACK_ACTIVE : CPP_STACK_ALWAYS_INACTIVE;
-      level = 1;
-    }
   while (at < n_cpp_tokens)
     {
       if (cpp_tokens[at].type == CPP_TOKEN_NEWLINE)
         at++;
-      if (guarded && level == 0 && at  )
-        {
-          /* extra tokens found after last endif */
-          guarded = false;
-        }
+      /* Some semantics of if-then-else directives is found in 6.10.1p6 */
       if (at_line_start && cpp_tokens[at].type == CPP_TOKEN_HASH
        && at + 1 < n_cpp_tokens
        && cpp_tokens[at+1].type == CPP_TOKEN_BAREWORD)
@@ -1779,7 +2143,6 @@ dbcc_parser_parse_file      (DBCC_Parser   *parser,
             {
               CPP_Expr cpp_expr;
               DBCC_Error *error = NULL;
-              guarded = true;
               unsigned n_expr_tokens = parse_cpp_expr (n_cpp_tokens - at - 1,
                                                        cpp_tokens + at + 1,
                                                        &cpp_expr, &error);
@@ -1790,86 +2153,137 @@ dbcc_parser_parse_file      (DBCC_Parser   *parser,
                 }
               at += n_expr_tokens + 2;  /* expression tokens plus '#' and if/ifdef/ifndef */
 
+              if (is_first)
+                {
+                  // completely densely copy cpp expr
+                  guard = copy_cpp_expr_densely (&cpp_expr);
+                }
+
               /* evaluate expr to see if we are live */
+              bool result;
               if (!eval_cpp_expr_boolean (parser, &cpp_expr, &result, &error))
                 {
                   parser->handlers.handle_error (error, parser->handler_data);
                   return false;
                 }
 
-              if (stack_statuses[level-1] != CPP_STACK_ACTIVE)
-                stack_statuses[level] = CPP_STACK_INACTIVE_PARENT;
+              if (preproc_conditional_level > 0 && !is_active_cpp_stack_state(PREPROC_TOP))
+                PREPROC_NEXT_TOP = CPP_STACK_INACTIVE_PARENT;
               else if (result)
-                stack_statuses[level] = CPP_STACK_ACTIVE;
+                PREPROC_NEXT_TOP = CPP_STACK_ACTIVE;
               else
-                stack_statuses[level] = CPP_STACK_ALWAYS_INACTIVE;
-              level = 1;
+                PREPROC_NEXT_TOP = CPP_STACK_INACTIVE_SO_FAR;
+              preproc_conditional_level += 1;
             }
           else if (cpp_tokens[at+1].length == 4
                &&  memcmp (cpp_tokens[at+1].str, "else", 4) == 0)
             {
               if (at + 2 >= n_cpp_tokens)
                 {
-                  ...eof
+                  DBCC_Error *error = dbcc_error_new (DBCC_ERROR_PREPROCESSOR_INCOMPLETE_LINE,
+                                           "incomplete line after #else");
+                  dbcc_error_add_code_position (error, cpp_tokens[at+1].code_position);
+                  parser->handlers.handle_error (error, parser->handler_data);
+                  return false;
                 }
-              if (cpp_tokens[at+2].type == CPP_TOKEN_NEWLINE)
+              if (cpp_tokens[at+2].type != CPP_TOKEN_NEWLINE)
                 {
-                  ...
+                  DBCC_Error *error = dbcc_error_new (DBCC_ERROR_PREPROCESSOR_SYNTAX,
+                                           "token after #else (type %s)",
+                                           cpp_token_type_name (cpp_tokens[at+2].type));
+                  dbcc_error_add_code_position (error, cpp_tokens[at+1].code_position);
+                  parser->handlers.handle_error (error, parser->handler_data);
+                  return false;
                 }
-              if (level == 0)
+              if (preproc_conditional_level == 0)
                 {
-                  ... no match if
+                  DBCC_Error *error = dbcc_error_new (DBCC_ERROR_PREPROCESSOR_UNMATCHED_ELSE,
+                                                      "got #else directive without corresponding #if");
+                  dbcc_error_add_code_position (error, cpp_tokens[at].code_position);
+                  parser->handlers.handle_error (error, parser->handler_data);
+                  return false;
                 }
-              switch (stack_statuses[level-1])
+              at += 3;
+              switch (PREPROC_TOP)
                 {
                 case CPP_STACK_INACTIVE_PARENT:
                   break;
                 case CPP_STACK_ACTIVE:
-                  stack_statuses[level] = CPP_STACK_ELSE_INACTIVE;
+                  PREPROC_NEXT_TOP = CPP_STACK_INACTIVE_BUT_HAS_BEEN_ACTIVE_ELSE;
                   break;
-                case CPP_STACK_ALWAYS_INACTIVE:
-                  stack_statuses[level] = CPP_STACK_ELSE_ACTIVE;
+                case CPP_STACK_INACTIVE_SO_FAR:
+                  PREPROC_NEXT_TOP = CPP_STACK_ACTIVE_ELSE;
                   break;
                 case CPP_STACK_INACTIVE_BUT_HAS_BEEN_ACTIVE:
-                  stack_statuses[level] = CPP_STACK_ELSE_INACTIVE;
+                  PREPROC_NEXT_TOP = CPP_STACK_INACTIVE_BUT_HAS_BEEN_ACTIVE_ELSE;
                   break;
 
-                case CPP_STACK_ELSE_ACTIVE:
-                case CPP_STACK_ELSE_INACTIVE:
-                  *error = dbcc_error_new (DBCC_ERROR_PREPROCESSOR_ELSE_NOT_ALLOWED,
-                                           "already had #else directive");
-                  dbcc_error_add_code_position (*error, cpp_tokens[at+1].code_position);
+                case CPP_STACK_ACTIVE_ELSE:
+                case CPP_STACK_INACTIVE_BUT_HAS_BEEN_ACTIVE_ELSE:
+                  {
+                    DBCC_Error *error = dbcc_error_new (DBCC_ERROR_PREPROCESSOR_ELSE_NOT_ALLOWED,
+                                                        "already had #else directive");
+                    dbcc_error_add_code_position (error, cpp_tokens[at+1].code_position);
+                    parser->handlers.handle_error (error, parser->handler_data);
+                  }
                   return false;
                 }
             }
           else if (cpp_tokens[at+1].length == 4
                &&  memcmp (cpp_tokens[at+1].str, "elif", 4) == 0)
             {
-              ... parse cpp expr
-              switch (stack_statuses[level-1])
+              CPP_Expr cpp_expr;
+              DBCC_Error *error = NULL;
+              unsigned n_expr_tokens = parse_cpp_expr (n_cpp_tokens - at - 1,
+                                                       cpp_tokens + at + 1,
+                                                       &cpp_expr, &error);
+              if (n_expr_tokens == 0)
+                {
+                  parser->handlers.handle_error (error, parser->handler_data);
+                  return false;
+                }
+              if (preproc_conditional_level == 0)
+                {
+                  error = dbcc_error_new (DBCC_ERROR_PREPROCESSOR_ELSE_NOT_ALLOWED,
+                                          "#elif encountered at toplevel");
+                  dbcc_error_add_code_position (error, cpp_tokens[at+1].code_position);
+                  parser->handlers.handle_error (error, parser->handler_data);
+                  return false;
+                }
+              at += n_expr_tokens + 2;  /* expression tokens plus '#' and if/ifdef/ifndef */
+
+              switch (PREPROC_TOP)
                 {
                 case CPP_STACK_INACTIVE_PARENT:
                   break;
                 case CPP_STACK_ACTIVE:
-                  stack_statuses[level] = CPP_STACK_INACTIVE_BUT_HAS_BEEN_ACTIVE;
+                  PREPROC_TOP = CPP_STACK_INACTIVE_BUT_HAS_BEEN_ACTIVE;
                   break;
-                case CPP_STACK_ALWAYS_INACTIVE:
+                case CPP_STACK_INACTIVE_SO_FAR:
+                  {
+                  bool result;
                   if (!eval_cpp_expr_boolean (parser, &cpp_expr, &result, &error))
                     {
                       parser->handlers.handle_error (error, parser->handler_data);
                       return false;
                     }
-                  ACTIVE or ALWAYS_INACTIVE
+                  if (result)
+                    PREPROC_TOP = CPP_STACK_ACTIVE;
+                  else
+                    PREPROC_TOP = CPP_STACK_INACTIVE_SO_FAR;
                   break;
+                  }
+
                 case CPP_STACK_INACTIVE_BUT_HAS_BEEN_ACTIVE:
                   /* no change */
                   break;
 
-                case CPP_STACK_ELSE_ACTIVE:
-                case CPP_STACK_ELSE_INACTIVE:
-                  *error = dbcc_error_new (DBCC_ERROR_PREPROCESSOR_ELSE_NOT_ALLOWED,
+                case CPP_STACK_ACTIVE_ELSE:
+                case CPP_STACK_INACTIVE_BUT_HAS_BEEN_ACTIVE_ELSE:
+                  error = dbcc_error_new (DBCC_ERROR_PREPROCESSOR_ELSE_NOT_ALLOWED,
                                            "already had #else directive");
-                  dbcc_error_add_code_position (*error, cpp_tokens[at+1].code_position);
+                  dbcc_error_add_code_position (error, cpp_tokens[at+1].code_position);
+                  parser->handlers.handle_error (error, parser->handler_data);
                   return false;
                 }
             }
@@ -1878,41 +2292,184 @@ dbcc_parser_parse_file      (DBCC_Parser   *parser,
             {
               if (at + 2 == n_cpp_tokens)
                 {
-                  *error = dbcc_error_new (DBCC_ERROR_UNEXPECTED_EOF,
+                  DBCC_Error *error;
+                  error = dbcc_error_new (DBCC_ERROR_UNEXPECTED_EOF,
                                            "missing name after #define");
-                  dbcc_error_add_code_position (*error, cpp_tokens[at+1].code_position);
+                  dbcc_error_add_code_position (error, cpp_tokens[at+1].code_position);
+                  parser->handlers.handle_error (error, parser->handler_data);
                   return false;
                 }
               if (cpp_tokens[at + 2].type != CPP_TOKEN_BAREWORD)
                 {
-                  *error = dbcc_error_new (DBCC_ERROR_UNEXPECTED_EOF,
+                  DBCC_Error *error;
+                  error = dbcc_error_new (DBCC_ERROR_UNEXPECTED_EOF,
                                            "missing name after #define, got %s",
                                            cpp_token_type_name (cpp_tokens[at + 2].type));
-                  dbcc_error_add_code_position (*error, cpp_tokens[at+1].code_position);
+                  dbcc_error_add_code_position (error, cpp_tokens[at+1].code_position);
+                  parser->handlers.handle_error (error, parser->handler_data);
                   return false;
                 }
             }
           else if (cpp_tokens[at+1].length == 5
                &&  memcmp (cpp_tokens[at+1].str, "endif", 5) == 0)
             {
-              if (level == 0)
+              if (preproc_conditional_level == 0)
                 {
-                  *error = dbcc_error_new (DBCC_ERROR_PREPROCESSOR_UNMATCHED_ENDIF,
-                                           "no #if/ifdef/ifndef for #endif");
-                  dbcc_error_add_code_position (*error, cpp_tokens[at+1].code_position);
+                  DBCC_Error *error;
+                  error = dbcc_error_new (DBCC_ERROR_PREPROCESSOR_UNMATCHED_ENDIF,
+                                          "no #if/ifdef/ifndef for #endif");
+                  dbcc_error_add_code_position (error, cpp_tokens[at+1].code_position);
+                  parser->handlers.handle_error (error, parser->handler_data);
                   return false;
                 }
-              ...
+              if (cpp_tokens[at+2].type == CPP_TOKEN_NEWLINE)
+                {
+                  DBCC_Error *error;
+                  error = dbcc_error_new (DBCC_ERROR_PREPROCESSOR_SYNTAX,
+                                          "extra token after #endif: %s",
+                                          cpp_token_type_name (cpp_tokens[at+2].type));
+                  dbcc_error_add_code_position (error, cpp_tokens[at+2].code_position);
+                  parser->handlers.handle_error (error, parser->handler_data);
+                  return false;
+                }
+
+              preproc_conditional_level--;
+              at += 3;
+              if (preproc_conditional_level == 0)
+                {
+                  past_last_endif = true;                         // delete guard if any more tokens found
+                  continue;
+                }
             }
-          else
+          else if (cpp_tokens[at+1].length == 4
+               &&  memcmp (cpp_tokens[at+1].str, "line", 4) == 0)
             {
-              ...
+              /* #line is handled earlier */
+            }
+          else if (cpp_tokens[at+1].length == 5
+               &&  memcmp (cpp_tokens[at+1].str, "error", 5) == 0)
+            {
+              /* Section 6.10.5 Error directive */
+              const char *msg = cpp_tokens[at+1].str + 5;
+              while (*msg != '\n' && isspace (*msg))
+                msg++;
+              const char *end_msg = strchr (msg, '\n');
+              if (end_msg == NULL)
+                end_msg = strchr (msg, 0);
+              DBCC_Error *error = dbcc_error_new (DBCC_ERROR_PREPROCESSOR_HASH_ERROR,
+                                  "#error processed: %.*s",
+                                  (int)(end_msg - msg), msg);
+              dbcc_error_add_code_position (error, cpp_tokens[at+1].code_position);
+              parser->handlers.handle_error (error, parser->handler_data);
+              return false;
+            }
+          else if (cpp_tokens[at+1].length == 5
+               &&  memcmp (cpp_tokens[at+1].str, "endif", 5) == 0)
+            {
+              if (cpp_tokens[at+2].type != CPP_TOKEN_NEWLINE)
+                {
+                  DBCC_Error *error;
+                  error = dbcc_error_new (DBCC_ERROR_PREPROCESSOR_SYNTAX,
+                                          "unexpected identifier after #endif");
+                  dbcc_error_add_code_position (error, cpp_tokens[at+2].code_position);
+                  parser->handlers.handle_error (error, parser->handler_data);
+                  return false;
+                }
+              if (preproc_conditional_level == 0)
+                {
+                  DBCC_Error *error;
+                  error = dbcc_error_new (DBCC_ERROR_PREPROCESSOR_UNMATCHED_ENDIF,
+                                          "#endif without corresponding #if");
+                  dbcc_error_add_code_position (error, cpp_tokens[at+1].code_position);
+                  parser->handlers.handle_error (error, parser->handler_data);
+                  return false;
+                }
+              preproc_conditional_level -= 1;
+              if (preproc_conditional_level == 0)
+                past_last_endif = true;
+            }
+          is_first = false;
+          if (past_last_endif && guard != NULL)
+            {
+              free (guard);
+              guard = NULL;
             }
         }
       else
         {
-          /* Emit P_Token */
-          ...
+          if (cpp_tokens[at].type != CPP_TOKEN_NEWLINE)
+            {
+              if (preproc_conditional_level == 0 || is_active_cpp_stack_state (PREPROC_TOP))
+                {
+                  DBCC_CodePosition *cp = cpp_tokens[at].code_position;
+                  P_Token pt;
+                  DBCC_Error *error = NULL;
+                  switch (cpp_tokens[at].type)
+                    {
+                    case CPP_TOKEN_HASH:
+                      assert(false);
+                    case CPP_TOKEN_CONCATENATE:              /* ## */
+                      assert(false);
+                    case CPP_TOKEN_MACRO_ARGUMENT:
+                    case CPP_TOKEN_NEWLINE:
+                      assert(false);
+                    case CPP_TOKEN_STRING:
+                      pt = P_TOKEN_INIT(STRING_LITERAL, cp);
+                      if (!dbcc_common_string_literal_value (cpp_tokens[at].length,
+                                                             cpp_tokens[at].str,
+                                                             &pt.string,
+                                                             &error))
+                       {
+                         dbcc_error_add_code_position (error, cpp_tokens[at].code_position);
+                         parser->handlers.handle_error (error, parser->handler_data);
+                         return false;
+                       }
+                      EMIT_PTOKEN_TO_PARSER(pt);
+                      break;
+                    case CPP_TOKEN_CHAR:
+                      pt = P_TOKEN_INIT(CHAR_CONSTANT, cp);
+                      ...
+                    case CPP_TOKEN_NUMBER:
+                      {
+                        if (dbcc_common_number_is_integral (...))
+                          {
+                            DBCC_Type *type = ...;
+                            ...
+                          }
+                        else
+                          {
+                            DBCC_Type *type = ...;
+                            ...
+                          }
+                      }
+                      break;
+
+                    case CPP_TOKEN_OPERATOR:
+                      memset (&pt, 0, sizeof (P_Token));
+                      if (!convert_cpp_token_operator_to_ptokentype (parser, &cpp_tokens[at], &pt.token_type, &error))
+                        {
+                          ...
+                        }
+                      pt.code_position = cp;
+                      EMIT_PTOKEN_TO_PARSER(pt);
+                      break;
+
+                    case CPP_TOKEN_OPERATOR_DIGRAPH:
+                      ...
+
+                    case CPP_TOKEN_BAREWORD:
+                      ...
+                    }
+
+                  ... emit P_Token
+                }
+
+              is_first = false;
+              if (past_last_endif && guard != NULL)
+                {
+                  ...
+                }
+            }
         }
     }
   return true;
@@ -1920,6 +2477,8 @@ dbcc_parser_parse_file      (DBCC_Parser   *parser,
 #undef CREATE_CP
 #undef APPEND_TOKEN
 #undef APPEND_CPP_TOKEN
+#undef PREPROC_TOP
+#undef PREPROC_NEXT_TOP
 }
 
 void
