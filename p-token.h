@@ -19,24 +19,32 @@ struct P_Token
   // so we don't want to export them.
   int token_type;
 
-  // only used for the following token types:
-  //     IDENTIFIER
-  //     TYPEDEF_NAME
-  DBCC_Symbol *symbol;
-
-  // only used for the following token types:
-  //     STRING_LITERAL
-  DBCC_String string;
-
-  // only used for the following token types:
-  //     TYPEDEF_NAME
-  DBCC_Type *type;
-
-  // for CHAR_CONSTANT
-  uint32_t i_value;
+  union {
+    // only used for the following token types:
+    //     IDENTIFIER
+    //     TYPEDEF_NAME
+    DBCC_Symbol *v_identifier;
+    struct {
+      DBCC_Symbol *name;
+      DBCC_Type *type;
+    } v_typedef_name;
+    DBCC_String v_string_literal;
+    struct {
+      uint8_t sizeof_value;
+      bool is_signed;
+      union {
+        int64_t v_int64;
+        uint64_t v_uint64;
+      };
+    } v_i_constant;
+    struct {
+      uint8_t sizeof_value;     // 4, 8, 10
+      long double v_long_double;
+    } v_f_constant;
+  };
 };
 
 #define P_TOKEN_INIT(shortname, cp) \
-  (P_Token) { (cp), P_TOKEN_##shortname, NULL, {0,NULL}, NULL, 0 }
+  (P_Token) { (cp), P_TOKEN_##shortname, {0,} }
 
 #endif

@@ -17,7 +17,8 @@ bool dbcc_common_string_literal_value(size_t       length,
                                       DBCC_String *out,
                                       DBCC_Error **error);
 
-bool dbcc_common_integer_get_info    (size_t       length,
+bool dbcc_common_integer_get_info    (DBCC_TargetEnvironment *target_env,
+                                      size_t       length,
                                       const char  *str,
                                       size_t      *sizeof_int_type_out,
                                       bool        *is_signed_out,

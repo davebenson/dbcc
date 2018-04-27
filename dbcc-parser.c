@@ -35,7 +35,6 @@
 
 #include "dbcc.h"
 #include "dbcc-dsk.h"
-#include "dbcc-common.h"
 #include "dbcc-parser.h"
 #include "dbcc-parser-lemon.h"
 #include "dbcc-parser-p.h"
@@ -190,6 +189,7 @@ struct DBCC_Parser
   P_Context *context;
   void *lemon_parser;
   DBCC_SymbolSpace *symbol_space;
+  DBCC_TargetEnvironment *target_environment;
 
   size_t n_include_dirs;
   char **include_dirs;
@@ -2417,7 +2417,7 @@ dbcc_parser_parse_file      (DBCC_Parser   *parser,
                       pt = P_TOKEN_INIT(STRING_LITERAL, cp);
                       if (!dbcc_common_string_literal_value (cpp_tokens[at].length,
                                                              cpp_tokens[at].str,
-                                                             &pt.string,
+                                                             &pt.v_string_literal,
                                                              &error))
                        {
                          dbcc_error_add_code_position (error, cpp_tokens[at].code_position);
@@ -2427,14 +2427,89 @@ dbcc_parser_parse_file      (DBCC_Parser   *parser,
                       EMIT_PTOKEN_TO_PARSER(pt);
                       break;
                     case CPP_TOKEN_CHAR:
-                      pt = P_TOKEN_INIT(CHAR_CONSTANT, cp);
-                      ...
+                      {
+                        uint32_t value;
+                        size_t sizeof_char;
+                        if (!dbcc_common_char_constant_value (cpp_tokens[at].length,
+                                                              cpp_tokens[at].str,
+                                                              &value,
+                                                              &sizeof_char,
+                                                              &error))
+                          {
+                            dbcc_error_add_code_position (error, cpp_tokens[at].code_position);
+                            parser->handlers.handle_error (error, parser->handler_data);
+                            return false;
+                          }
+                        P_Token t = {
+                          .code_position = cpp_tokens[at].code_position,
+                          .token_type = P_TOKEN_I_CONSTANT,
+                          .v_i_constant.sizeof_value = sizeof_char,
+                          .v_i_constant.is_signed = false,
+                          .v_i_constant.v_uint64 = value;
+                        };
+                        ...
+                      }
                     case CPP_TOKEN_NUMBER:
                       {
-                        if (dbcc_common_number_is_integral (...))
+                        if (dbcc_common_number_is_integral (cpp_tokens[at].length,
+                                                            cpp_tokens[at].str))
                           {
-                            DBCC_Type *type = ...;
-                            ...
+                            size_t sizeof_int_type;
+                            bool is_signed;
+                            if (!dbcc_common_integer_get_info (parser->target_environment,
+                                                               cpp_tokens[at].length,
+                                                               cpp_tokens[at].str,
+                                                               &sizeof_int_type,
+                                                               &is_signed,
+                                                               &error))
+                              {
+                                dbcc_error_add_code_position (error, cpp_tokens[at].code_position);
+                                parser->handlers.handle_error (error, parser->handler_data);
+                                return false;
+                              }
+
+                            if (is_signed)
+                              {
+                                char *end;
+                                int64_t v = strtoll (cpp_tokens[at].str, &end, 0);
+                                if (cpp_tokens[at].str == end)
+                                  {
+                                    error = dbcc_error_new (DBCC_ERROR_PARSING_INTEGER,
+                                                            "error parsing signed integer");
+                                    dbcc_error_add_code_position (error, cpp_tokens[at].code_position);
+                                    parser->handlers.handle_error (error, parser->handler_data);
+                                    return false;
+                                  }
+                                P_Token t = {
+                                  .code_position = cpp_tokens[at].code_position,
+                                  .token_type = P_TOKEN_I_CONSTANT,
+                                  .v_i_constant.sizeof_value = sizeof_int_type,
+                                  .v_i_constant.is_signed = is_signed,
+                                  .v_i_constant.v_int64 = v;
+                                };
+                                EMIT_PTOKEN_TO_PARSER(t);
+                              }
+                            else
+                              {
+                                char *end;
+                                uint64_t v = strtoull (cpp_tokens[at].str, &end, 0);
+                                if (cpp_tokens[at].str == end)
+                                  {
+                                    error = dbcc_error_new (DBCC_ERROR_PARSING_INTEGER,
+                                                            "error parsing unsigned integer");
+                                    dbcc_error_add_code_position (error, cpp_tokens[at].code_position);
+                                    parser->handlers.handle_error (error, parser->handler_data);
+                                    return false;
+                                  }
+                                P_Token t = {
+                                  .code_position = cpp_tokens[at].code_position,
+                                  .token_type = P_TOKEN_I_CONSTANT,
+                                  .v_i_constant.sizeof_value = sizeof_int_type,
+                                  .v_i_constant.is_signed = is_signed,
+                                  .v_i_constant.v_uint64 = v;
+                                };
+                                EMIT_PTOKEN_TO_PARSER(t);
+                              }
                           }
                         else
                           {
@@ -2446,7 +2521,7 @@ dbcc_parser_parse_file      (DBCC_Parser   *parser,
 
                     case CPP_TOKEN_OPERATOR:
                       memset (&pt, 0, sizeof (P_Token));
-                      if (!convert_cpp_token_operator_to_ptokentype (parser, &cpp_tokens[at], &pt.token_type, &error))
+                      if (!convert_cpp_token_operator_to_ptokentype (&cpp_tokens[at], &pt.token_type, &error))
                         {
                           ...
                         }

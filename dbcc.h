@@ -6,6 +6,8 @@ typedef struct DBCC_Param DBCC_Param;
 typedef union DBCC_Type DBCC_Type;
 typedef union DBCC_Statement DBCC_Statement;
 typedef union DBCC_Expr DBCC_Expr;
+typedef struct DBCC_String DBCC_String;
+typedef struct DBCC_TargetEnvironment DBCC_TargetEnvironment;
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -15,6 +17,7 @@ typedef union DBCC_Expr DBCC_Expr;
 #include "dbcc-code-position.h"
 #include "dbcc-error.h"
 #include "dbcc-ptr-table.h"
+#include "dbcc-target-environment.h"
 
 typedef enum
 {
@@ -104,7 +107,6 @@ typedef struct
 DBCC_EnumValue *dbcc_enum_value_new (DBCC_Symbol *symbol,
                                      int          value);
 
-typedef struct DBCC_String DBCC_String;
 struct DBCC_String
 {
   size_t length;
@@ -129,6 +131,7 @@ struct DBCC_Param
 #include "dbcc-expr.h"
 #include "dbcc-statement.h"
 #include "dbcc-namespace.h"
+#include "dbcc-common.h"
 
 #if 0
 // The C Grammar we use defines a Declaration as a tricky beast with a list of "Declarators",
