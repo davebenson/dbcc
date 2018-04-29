@@ -3,6 +3,7 @@
 bool dbcc_common_char_constant_value (size_t length,
                                       const char *str,
                                       uint32_t   *codepoint_out,
+                                      size_t     *sizeof_char,
                                       DBCC_Error **error);
 
 bool dbcc_common_number_is_integral  (size_t       length,
@@ -24,7 +25,8 @@ bool dbcc_common_integer_get_info    (DBCC_TargetEnvironment *target_env,
                                       bool        *is_signed_out,
                                       DBCC_Error **error);
 
-bool dbcc_common_floating_point_get_info(size_t       length,
+bool dbcc_common_floating_point_get_info(DBCC_TargetEnvironment *target_env,
+                                         size_t       length,
                                          const char  *str,
-                                         DBCC_FloatType float_type,
+                                         size_t      *sizeof_float_type_out,
                                          DBCC_Error **error);

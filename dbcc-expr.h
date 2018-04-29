@@ -106,12 +106,13 @@ DBCC_Expr *dbcc_expr_new_sizeof_type      (DBCC_Type          *type);
 DBCC_Expr *dbcc_expr_new_subscript        (DBCC_Expr          *object,
                                            DBCC_Expr          *subscript);
 DBCC_Expr *dbcc_expr_new_symbol           (DBCC_Symbol        *symbol);
-DBCC_Expr *dbcc_expr_new_int_constant     (const char         *str,
-                                           DBCC_Error        **error);
+DBCC_Expr *dbcc_expr_new_int_constant     (bool                is_signed,
+                                           size_t              sizeof_value,
+                                           uint64_t            value);
 DBCC_Expr *dbcc_expr_new_string_constant  (DBCC_String        *constant);
 DBCC_Expr *dbcc_expr_new_enum_constant    (DBCC_EnumValue     *enum_value);
-DBCC_Expr *dbcc_expr_new_float_constant   (const char         *str,
-                                           DBCC_Error        **error);
+DBCC_Expr *dbcc_expr_new_float_constant   (size_t              sizeof_value,
+                                           long double         value);
 DBCC_Expr *dbcc_expr_new_char_constant    (bool                is_long,
                                            uint32_t            value);
 DBCC_Expr *dbcc_expr_new_unary            (DBCC_UnaryOperator  op,

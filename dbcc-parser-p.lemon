@@ -125,6 +125,17 @@ typedef struct P_GenericAssociation P_GenericAssociation;
     return;                          \
   }while(0)
 
+#if 0
+static inline char *
+token_strdup (P_Token *t)
+{
+  char *rv = malloc (t->length + 1);
+  memcpy (rv, t->str, t->length);
+  rv[t->length] = 0;
+  return rv;
+}
+#endif
+
 /* Forward declarations of various internal functions */
 static bool declaration_list_to_params (P_Context *context, 
                                         P_DeclarationList *list,
@@ -1927,7 +1938,7 @@ error_set_code_location_from_expr (P_Context *context, DBCC_Expr *expr)
 
 primary_expression(rv) ::= IDENTIFIER(id).
         { DBCC_NamespaceEntry ns_entry;
-          if (!p_context_lookup (context, id.symbol, id.code_position, &ns_entry))
+          if (!p_context_lookup (context, id.v_identifier, id.code_position, &ns_entry))
             FAIL();             /// error set by p_context_lookup
 
           // for purposes for the grammar,
@@ -1937,22 +1948,24 @@ primary_expression(rv) ::= IDENTIFIER(id).
           // should already have been handled at lexing time.
           assert(ns_entry.entry_type == DBCC_NAMESPACE_ENTRY_GLOBAL);
 
-          rv = dbcc_expr_new_symbol (id.symbol);
+          rv = dbcc_expr_new_symbol (id.v_identifier);
         }
 primary_expression(rv) ::= I_CONSTANT(c).
-        { rv = dbcc_expr_new_int_constant (c.string.str, &context->error); }
+        { rv = dbcc_expr_new_int_constant (c.v_i_constant.is_signed,
+                                           c.v_i_constant.sizeof_value,
+                                           c.v_i_constant.v_uint64);
+          dbcc_expr_add_code_position (rv, c.code_position); }
 primary_expression(rv) ::= F_CONSTANT(c).
-        { rv = dbcc_expr_new_float_constant (c.string.str, &context->error); }
+        { rv = dbcc_expr_new_float_constant (c.v_f_constant.sizeof_value,
+                                             c.v_f_constant.v_long_double);
+          dbcc_expr_add_code_position (rv, c.code_position); }
 primary_expression(rv) ::= ENUMERATION_CONSTANT(c).
-        { DBCC_NamespaceEntry ns_entry;
-          if (!p_context_lookup (context, c.symbol, c.code_position, &ns_entry))
-            assert(0);
-          assert(ns_entry.entry_type == DBCC_NAMESPACE_ENTRY_ENUM_VALUE);
-          rv = dbcc_expr_new_enum_constant (ns_entry.v_enum_value); }
+        { rv = dbcc_expr_new_enum_constant (c.v_enum_value); }
 primary_expression(rv) ::= CHAR_CONSTANT(c).
-        { rv = dbcc_expr_new_char_constant (c.i_value >= 0x100, c.i_value);             // XXX: is_long not remotely correct
-          dbcc_expr_add_code_position (rv, c.code_position);
-        }
+        { rv = dbcc_expr_new_int_constant (c.v_i_constant.is_signed,
+                                           c.v_i_constant.sizeof_value,
+                                           c.v_i_constant.v_uint64);
+          dbcc_expr_add_code_position (rv, c.code_position); }
 primary_expression(rv) ::= string(s).
         { rv = dbcc_expr_new_string_constant (&s);
           s.str = NULL; }
@@ -1964,16 +1977,16 @@ primary_expression(rv) ::= generic_selection(g).
 // enumeration_constant is an identifier that is suitable for making into a EnumValue
 enumeration_constant(rv) ::= IDENTIFIER(s).
 	{ 
-          assert(s.symbol != NULL);
-          rv = s.symbol;
+          assert(s.v_identifier != NULL);
+          rv = s.v_identifier;
         }
 
 string(rv) ::= STRING_LITERAL(s).
-        { rv = s.string; }
+        { rv = s.v_string_literal; }
 
 string(rv) ::= FUNC_NAME(s).
-        { rv.str = strdup (dbcc_symbol_get_string (s.symbol));
-          rv.length = s.symbol->length;
+        { rv.str = strdup (dbcc_symbol_get_string (s.v_func_name));
+          rv.length = s.v_func_name->length;
         }
 
 generic_selection(rv) ::= GENERIC LPAREN assignment_expression(key_expr) COMMA generic_assoc_list(list) RPAREN.
@@ -2040,11 +2053,11 @@ postfix_expression(rv) ::= postfix_expression(head) LPAREN argument_expression_l
           rv = dbcc_expr_new_call (head, count, args); }
 
 postfix_expression(rv) ::= postfix_expression(head) PERIOD IDENTIFIER(id).
-        { rv = dbcc_expr_new_member_access(head, id.symbol);
+        { rv = dbcc_expr_new_member_access(head, id.v_identifier);
         }
 
 postfix_expression(rv) ::= postfix_expression(head) POINTER_ACCESS IDENTIFIER(id).
-        { rv = dbcc_expr_new_pointer_access (head, id.symbol); }
+        { rv = dbcc_expr_new_pointer_access (head, id.v_identifier); }
 postfix_expression(rv) ::= postfix_expression(expr) INCREMENT.
         { rv = dbcc_expr_new_inplace_unary(DBCC_INPLACE_UNARY_OPERATOR_POST_INCR, expr); }
 postfix_expression(rv) ::= postfix_expression(expr) DECREMENT.
@@ -2327,6 +2340,9 @@ type_specifier(rv) ::= CHAR.
 type_specifier(rv) ::= INT.
         { rv = P_TYPE_SPECIFIERS_INIT;
           rv.counts[P_TYPE_SPECIFIERS_INDEX_CHAR] = 1; }
+type_specifier(rv) ::= SHORT.
+        { rv = P_TYPE_SPECIFIERS_INIT;
+          rv.counts[P_TYPE_SPECIFIERS_INDEX_SHORT] = 1; }
 type_specifier(rv) ::= LONG.
         { rv = P_TYPE_SPECIFIERS_INIT;
           rv.counts[P_TYPE_SPECIFIERS_INDEX_CHAR] = 1; }
@@ -2377,11 +2393,11 @@ type_specifier(rv) ::= enum_specifier(a).
 type_specifier(rv) ::= TYPEDEF_NAME(t).
 	{ rv = P_TYPE_SPECIFIERS_INIT;
           rv.counts[P_TYPE_SPECIFIERS_INDEX_TYPEDEF] = 1;
-          rv.type = t.type; }
+          rv.type = t.v_typedef_name.type; }
 
 struct_or_union_specifier(rv) ::= STRUCT IDENTIFIER(tag_token).
         { rv = context_new_struct_stub (context,
-                                        tag_token.symbol,
+                                        tag_token.v_identifier,
                                         tag_token.code_position);
           if (rv == NULL) 
             FAIL();
@@ -2400,7 +2416,7 @@ struct_or_union_specifier(rv)  ::= STRUCT(s) opt_identifier(tag) LBRACE struct_d
         }
 struct_or_union_specifier(rv) ::= UNION IDENTIFIER(tag_token).
         { rv = context_new_union_stub (context,
-                                       tag_token.symbol,
+                                       tag_token.v_identifier,
                                        tag_token.code_position);
           if (rv == NULL) 
             FAIL();
@@ -2498,7 +2514,7 @@ enum_specifier(rv) ::= ENUM opt_identifier(id) LBRACE enumerator_list(list) opt_
 opt_identifier(rv) ::= .
         { rv = NULL; }
 opt_identifier(rv) ::= IDENTIFIER(id).
-        { rv = id.symbol; }
+        { rv = id.v_identifier; }
 
 enumerator_list(rv) ::= enumerator(e).
         { P_EnumValueNode *node = malloc (sizeof (P_EnumValueNode));
@@ -2583,7 +2599,7 @@ declarator(out) ::= direct_declarator(in).
         { out = in; }
 
 direct_declarator(decl) ::= IDENTIFIER(id).
-        { decl = p_declarator_new_name (id.symbol); }
+        { decl = p_declarator_new_name (id.v_identifier); }
 
 direct_declarator(decl) ::= LPAREN declarator(in) RPAREN.
         { decl = in; }
@@ -2667,10 +2683,10 @@ opt_parameter_type_list(rv) ::= .
 
 identifier_list(rv) ::= IDENTIFIER(id).
         { rv.first = rv.last = NULL;
-          p_identifier_list_append (&rv, id.symbol); }
+          p_identifier_list_append (&rv, id.v_identifier); }
 identifier_list(rv) ::= identifier_list(a) COMMA IDENTIFIER(id).
         { rv = a;
-          p_identifier_list_append (&rv, id.symbol); }
+          p_identifier_list_append (&rv, id.v_identifier); }
 
 type_name(type) ::= specifier_qualifier_list(q) abstract_declarator(d).
         { type = type_from_parts (context, q, d); }
@@ -2766,10 +2782,10 @@ designator(rv) ::= LBRACKET constant_expression(index) RBRACKET.
         { rv = p_designator_new_array_index (index);
           index = NULL; }
 designator(rv) ::= PERIOD IDENTIFIER(id).
-        { rv = p_designator_new_struct_member (id.symbol); }
+        { rv = p_designator_new_struct_member (id.v_identifier); }
 
 static_assert_declaration(decl) ::= STATIC_ASSERT LPAREN constant_expression(expr) COMMA STRING_LITERAL(explanation) RPAREN SEMICOLON.
-	{ decl = p_static_assertion_new (expr, &explanation.string); }
+	{ decl = p_static_assertion_new (expr, &explanation.v_string_literal); }
 
 statement(rv) ::= labeled_statement(stmt).
         { rv = stmt; }
@@ -2785,7 +2801,7 @@ statement(rv) ::= jump_statement(stmt).
         { rv = stmt; }
 
 labeled_statement(rv) ::= IDENTIFIER(id) COLON statement(stmt).
-        { p_statement_list_init1 (&rv, dbcc_statement_new_label (id.symbol));
+        { p_statement_list_init1 (&rv, dbcc_statement_new_label (id.v_identifier));
           p_statement_list_append_list (&rv, &stmt); }
 labeled_statement(rv) ::= CASE constant_expression(value) COLON statement(stmt).
         { p_statement_list_init1 (&rv, dbcc_statement_new_case (value));
@@ -2929,7 +2945,7 @@ iteration_statement(rv) ::= FOR(fr) LPAREN declaration(decl) expression_statemen
             FAIL();
           p_statement_list_init1 (&rv, f); }
 jump_statement(rv) ::= GOTO(g) IDENTIFIER(id) SEMICOLON.
-        { p_statement_list_init1 (&rv, dbcc_statement_new_jump (id.symbol, g.code_position)); }
+        { p_statement_list_init1 (&rv, dbcc_statement_new_jump (id.v_identifier, g.code_position)); }
 jump_statement(rv) ::= CONTINUE(c) SEMICOLON.
         { p_statement_list_init1 (&rv, dbcc_statement_new_continue (c.code_position)); }
 jump_statement(rv) ::= BREAK(b) SEMICOLON.

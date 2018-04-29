@@ -41,6 +41,11 @@ struct P_Token
       uint8_t sizeof_value;     // 4, 8, 10
       long double v_long_double;
     } v_f_constant;
+
+    DBCC_Symbol *v_func_name;
+
+    // for ENUMERATION_CONSTANT
+    DBCC_EnumValue *v_enum_value;
   };
 };
 

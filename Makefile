@@ -1,7 +1,7 @@
 CC = cc
 CFLAGS = -W -Wall -g -std=c11
 
-libdbcc.a: dbcc-parser-p.o dbcc-parser.o
+libdbcc.a: dbcc-parser-p.o dbcc-parser.o dbcc-symbol.o
 	ar cru $@ $^
 
 lemon: lemon.c

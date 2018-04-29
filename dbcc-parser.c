@@ -206,6 +206,8 @@ struct DBCC_Parser
  parent, left, right,          \
  COMPARE_CPP_MACROS
 
+#define parser_get_ns(parser)      ((parser)->globals)
+
 
 DBCC_Parser *
 dbcc_parser_new             (DBCC_Parser_Handlers *handlers,
@@ -1413,9 +1415,11 @@ tokens_to_boolean_value (unsigned     n_tokens,
         case CPP_TOKEN_CHAR:
           {
             uint32_t v;
+            size_t sizeof_char;
             if (!dbcc_common_char_constant_value (tokens[i].length,
                                                   tokens[i].str,
                                                   &v,
+                                                  &sizeof_char,
                                                   error))
               {
                 dbcc_error_add_code_position (*error, tokens[i].code_position);
@@ -1742,6 +1746,219 @@ convert_cpp_token_operator_to_ptokentype (CPP_Token   *token,
     }
 }
 
+static bool
+convert_cpp_token_digraph_operator_to_ptokentype (CPP_Token   *token,
+                                                  int         *token_type_out,
+                                                  DBCC_Error **error)
+{
+  if (token->length != 2)
+    {
+      *error = dbcc_error_new (DBCC_ERROR_BAD_OPERATOR,
+                               "invalid digraph operator length (must be 2, was %u)",
+                               (unsigned)(token->length));
+      dbcc_error_add_code_position (*error, token->code_position);
+      return false;
+    }
+  switch (token->str[0])
+    {
+    case '<':
+      if (token->str[1] == ':') { *token_type_out = P_TOKEN_LBRACKET; return true; }
+      if (token->str[1] == '%') { *token_type_out = P_TOKEN_LBRACE; return true; }
+      break;
+    case '%':
+      if (token->str[1] == '>') { *token_type_out = P_TOKEN_RBRACE; return true; }
+      break;
+    case ':':
+      if (token->str[1] == '>') { *token_type_out = P_TOKEN_RBRACKET; return true; }
+      break;
+    }
+  *error = dbcc_error_new (DBCC_ERROR_BAD_OPERATOR,
+                           "invalid digraph operator: '%.*s'",
+                           (int)(token->length), token->str);
+  dbcc_error_add_code_position (*error, token->code_position);
+  return false;
+}
+
+/* probably over-optimized :) */
+static bool
+is_reserved_word (DBCC_Symbol *symbol,
+                  int *p_token_type_out)
+{
+  size_t length = symbol->length;
+  const char *str = dbcc_symbol_get_string (symbol);
+#define TEST_AND_RETURN(namestr, shortname)    \
+  if (memcmp(str, namestr, length) == 0)       \
+    {                                          \
+      *p_token_type_out = P_TOKEN_##shortname; \
+      return true;                             \
+    }
+  switch (length)
+    {
+    case 2:
+      switch (str[0])
+        {
+        case 'd':
+          if (str[1] == 'o') { *p_token_type_out = P_TOKEN_DO; return true; }
+          return false;
+        case 'i':
+          if (str[1] == 'f') { *p_token_type_out = P_TOKEN_IF; return true; }
+          return false;
+        }
+      return false;
+
+    case 3:
+      switch (str[0])
+        {
+        case 'f':
+          if (str[1] == 'o' && str[2] == 'r') { *p_token_type_out = P_TOKEN_FOR; return true; }
+          return false;
+        case 'i':
+          if (str[1] == 'n' && str[2] == 't') { *p_token_type_out = P_TOKEN_INT; return true; }
+          return false;
+        }
+      return false;
+
+    case 4:
+      switch (str[0])
+        {
+        case 'a':
+          TEST_AND_RETURN("auto", AUTO);
+          return false;
+        case 'c':
+          TEST_AND_RETURN("case", CASE);
+          TEST_AND_RETURN("char", CHAR);
+          return false;
+        case 'e':
+          TEST_AND_RETURN("else", ELSE);
+          TEST_AND_RETURN("enum", ENUM);
+          return false;
+        case 'g':
+          TEST_AND_RETURN("goto", GOTO);
+          return false;
+        case 'l':
+          TEST_AND_RETURN("long", LONG);
+          return false;
+        case 'v':
+          TEST_AND_RETURN("void", VOID);
+          return false;
+        }
+      return false;
+
+    case 5:
+      switch (str[0])
+        {
+        case '_':
+          TEST_AND_RETURN("_Bool", BOOL);
+          return false;
+        case 'b':
+          TEST_AND_RETURN("break", BREAK);
+          return false;
+        case 'c':
+          TEST_AND_RETURN("const", CONST);
+          return false;
+        case 'f':
+          TEST_AND_RETURN("float", FLOAT);
+          return false;
+        case 's':
+          TEST_AND_RETURN("short", SHORT);
+          return false;
+        case 'u':
+          TEST_AND_RETURN("union", UNION);
+          return false;
+        case 'w':
+          TEST_AND_RETURN("while", WHILE);
+          return false;
+        }
+      return false;
+
+    case 6:
+      switch (str[0])
+        {
+        case 'd':
+          TEST_AND_RETURN("double", DOUBLE);
+          return false;
+        case 'e':
+          TEST_AND_RETURN("extern", EXTERN);
+          return false;
+        case 'i':
+          TEST_AND_RETURN("inline", INLINE);
+          return false;
+        case 'r':
+          TEST_AND_RETURN("return", RETURN);
+          return false;
+        case 's':
+          TEST_AND_RETURN("signed", SIGNED);
+          TEST_AND_RETURN("sizeof", SIZEOF);
+          TEST_AND_RETURN("static", STATIC);
+          TEST_AND_RETURN("struct", STRUCT);
+          TEST_AND_RETURN("switch", SWITCH);
+          return false;
+        }
+      return false;
+
+    case 7:
+      switch (str[0])
+        {
+        case '_':
+          TEST_AND_RETURN("_Atomic", ATOMIC);
+          return false;
+        case 'a':
+          TEST_AND_RETURN("alignof", ALIGNOF);
+          return false;
+        case 'd':
+          TEST_AND_RETURN("default", DEFAULT);
+          return false;
+        case 't':
+          TEST_AND_RETURN("typedef", TYPEDEF);
+          return false;
+        }
+      return false;
+
+    case 8:
+      switch (str[0])
+        {
+        case '_':
+          TEST_AND_RETURN("_Alignas", ALIGNAS);
+          TEST_AND_RETURN("_Complex", COMPLEX);
+          TEST_AND_RETURN("_Generic", GENERIC);
+          return false;
+        case 'c':
+          TEST_AND_RETURN("continue", CONTINUE);
+          return false;
+        case 'r':
+          TEST_AND_RETURN("register", REGISTER);
+          TEST_AND_RETURN("restrict", RESTRICT);
+          return false;
+        case 'u':
+          TEST_AND_RETURN("unsigned", UNSIGNED);
+          return false;
+        case 'v':
+          TEST_AND_RETURN("volatile", VOLATILE);
+          return false;
+        }
+      return false;
+
+    case 9:
+      TEST_AND_RETURN ("_Noreturn", NORETURN);
+      return false;
+
+    case 10:
+      TEST_AND_RETURN ("_Imaginary", IMAGINARY);
+      return false;
+
+    case 13:
+      TEST_AND_RETURN ("_Thread_local", THREAD_LOCAL);
+      return false;
+
+    case 14:
+      TEST_AND_RETURN ("_Static_assert", STATIC_ASSERT);
+      return false;
+    }
+#undef TEST_AND_RETURN
+
+  return false;
+}
+
 typedef enum
 {
   CPP_STACK_INACTIVE_PARENT,
@@ -1815,6 +2032,7 @@ scan_maybe_hash_line (DBCC_Parser *parser,
       *filename_symbol_inout = sym;
     }
 }
+
 bool
 dbcc_parser_parse_file      (DBCC_Parser   *parser,
                              const char    *filename)
@@ -2445,9 +2663,9 @@ dbcc_parser_parse_file      (DBCC_Parser   *parser,
                           .token_type = P_TOKEN_I_CONSTANT,
                           .v_i_constant.sizeof_value = sizeof_char,
                           .v_i_constant.is_signed = false,
-                          .v_i_constant.v_uint64 = value;
+                          .v_i_constant.v_uint64 = value,
                         };
-                        ...
+                        EMIT_PTOKEN_TO_PARSER(t);
                       }
                     case CPP_TOKEN_NUMBER:
                       {
@@ -2485,7 +2703,7 @@ dbcc_parser_parse_file      (DBCC_Parser   *parser,
                                   .token_type = P_TOKEN_I_CONSTANT,
                                   .v_i_constant.sizeof_value = sizeof_int_type,
                                   .v_i_constant.is_signed = is_signed,
-                                  .v_i_constant.v_int64 = v;
+                                  .v_i_constant.v_int64 = v,
                                 };
                                 EMIT_PTOKEN_TO_PARSER(t);
                               }
@@ -2506,43 +2724,133 @@ dbcc_parser_parse_file      (DBCC_Parser   *parser,
                                   .token_type = P_TOKEN_I_CONSTANT,
                                   .v_i_constant.sizeof_value = sizeof_int_type,
                                   .v_i_constant.is_signed = is_signed,
-                                  .v_i_constant.v_uint64 = v;
+                                  .v_i_constant.v_uint64 = v,
                                 };
                                 EMIT_PTOKEN_TO_PARSER(t);
                               }
                           }
                         else
                           {
-                            DBCC_Type *type = ...;
-                            ...
+                            char *end;
+                            long double v = strtold(cpp_tokens[at].str, &end);
+                            if (cpp_tokens[at].str == end)
+                              {
+                                error = dbcc_error_new (DBCC_ERROR_PARSING_FLOAT,
+                                                        "error parsing floating-pointer number");
+                                dbcc_error_add_code_position (error, cpp_tokens[at].code_position);
+                                parser->handlers.handle_error (error, parser->handler_data);
+                                return false;
+                              }
+                            size_t sizeof_float_type;
+                            DBCC_Error *error = NULL;
+                            if (!dbcc_common_floating_point_get_info(parser->target_environment,
+                                                            cpp_tokens[at].length,
+                                                            cpp_tokens[at].str,
+                                                            &sizeof_float_type,
+                                                            &error))
+                              {
+                                dbcc_error_add_code_position (error, cpp_tokens[at].code_position);
+                                parser->handlers.handle_error (error, parser->handler_data);
+                                return false;
+                              }
+                            P_Token t = {
+                              .code_position = cpp_tokens[at].code_position,
+                              .token_type = P_TOKEN_F_CONSTANT,
+                              .v_f_constant.sizeof_value = sizeof_float_type,
+                              .v_f_constant.v_long_double = v,
+                            };
+                            EMIT_PTOKEN_TO_PARSER(t);
                           }
                       }
                       break;
 
                     case CPP_TOKEN_OPERATOR:
-                      memset (&pt, 0, sizeof (P_Token));
-                      if (!convert_cpp_token_operator_to_ptokentype (&cpp_tokens[at], &pt.token_type, &error))
-                        {
-                          ...
-                        }
-                      pt.code_position = cp;
-                      EMIT_PTOKEN_TO_PARSER(pt);
-                      break;
+                      {
+                        DBCC_Error *error = NULL;
+                        memset (&pt, 0, sizeof (P_Token));
+                        if (!convert_cpp_token_operator_to_ptokentype (&cpp_tokens[at], &pt.token_type, &error))
+                          {
+                            parser->handlers.handle_error (error, parser->handler_data);
+                            return false;
+                          }
+                        pt.code_position = cp;
+                        EMIT_PTOKEN_TO_PARSER(pt);
+                        break;
+                      }
 
                     case CPP_TOKEN_OPERATOR_DIGRAPH:
-                      ...
+                      {
+                        DBCC_Error *error = NULL;
+                        memset (&pt, 0, sizeof (P_Token));
+                        if (!convert_cpp_token_digraph_operator_to_ptokentype (&cpp_tokens[at], &pt.token_type, &error))
+                          {
+                            parser->handlers.handle_error (error, parser->handler_data);
+                            return false;
+                          }
+                        pt.code_position = cp;
+                        EMIT_PTOKEN_TO_PARSER(pt);
+                        break;
+                      }
 
                     case CPP_TOKEN_BAREWORD:
-                      ...
+                      {
+                        int token_type;
+                        DBCC_Symbol *symbol = dbcc_symbol_space_force_len (parser->symbol_space,
+                                                                           cpp_tokens[at].length,
+                                                                           cpp_tokens[at].str);
+                        if (is_reserved_word (symbol, &token_type))
+                          {
+                            // known reserved word
+                            pt = (P_Token) {.code_position = cpp_tokens[at].code_position,
+                                            .token_type = token_type};
+                          }
+                        else
+                          {
+                            DBCC_NamespaceEntry ns_entry;
+                            if (!dbcc_namespace_lookup (parser_get_ns (parser),
+                                                        symbol,
+                                                        &ns_entry))
+                              {
+                                // fallback to IDENTIFIER
+                                pt = (P_Token) {.code_position = cpp_tokens[at].code_position,
+                                                .token_type = P_TOKEN_IDENTIFIER,
+                                                .v_identifier = symbol};
+                              }
+                            else
+                              switch (ns_entry.entry_type)
+                                {
+                                case DBCC_NAMESPACE_ENTRY_TYPEDEF:
+                                  pt = (P_Token) {.code_position = cpp_tokens[at].code_position,
+                                                  .token_type = P_TOKEN_TYPEDEF_NAME,
+                                                  .v_typedef_name.type = ns_entry.v_typedef,
+                                                  .v_typedef_name.name = symbol };
+                                  break;
+                                case DBCC_NAMESPACE_ENTRY_GLOBAL:
+                                  pt = (P_Token) {.code_position = cpp_tokens[at].code_position,
+                                                  .token_type = P_TOKEN_IDENTIFIER,
+                                                  .v_identifier = symbol};
+                                  break;
+                                case DBCC_NAMESPACE_ENTRY_ENUM_VALUE:
+                                  pt = (P_Token) {.code_position = cpp_tokens[at].code_position,
+                                                  .token_type = P_TOKEN_ENUMERATION_CONSTANT,
+                                                  .v_enum_value = ns_entry.v_enum_value};
+                                  break;
+                                default:
+                                  assert(0);
+                                }
+                          }
+                        EMIT_PTOKEN_TO_PARSER(pt);
+                        break;
+                      }
                     }
 
-                  ... emit P_Token
                 }
 
               is_first = false;
               if (past_last_endif && guard != NULL)
                 {
-                  ...
+                  free (guard);
+                  guard = NULL;
                 }
             }
         }
@@ -2554,11 +2862,13 @@ dbcc_parser_parse_file      (DBCC_Parser   *parser,
 #undef APPEND_CPP_TOKEN
 #undef PREPROC_TOP
 #undef PREPROC_NEXT_TOP
+#undef EMIT_PTOKEN_TO_PARSER
 }
 
 void
 dbcc_parser_destroy         (DBCC_Parser   *parser)
 {
-  ...
+  DBCC_Lemon_ParserFree(parser->lemon_parser, free);
+  //TODO free other stuff
+  free (parser);
 }
-
