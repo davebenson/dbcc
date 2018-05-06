@@ -870,39 +870,76 @@ dbcc_type_value_to_json(DBCC_Type   *type,
     case DBCC_TYPE_METATYPE_ENUM:
       {
         // get value
+        // XXX: Justify using signed enum values?
         int64_t v;
-        ...
+        switch (type->base.sizeof_instance)
+          {
+          case 1: v = * (int8_t *) value; break;
+          case 2: v = * (int16_t *) value; break;
+          case 4: v = * (int32_t *) value; break;
+          case 8: v = * (int64_t *) value; break;
+          default: assert(false);
+          }
 
         // does it have a symbol name?
         DBCC_EnumValue *ev = dbcc_type_enum_lookup_value (type, v);
         if (ev == NULL)
           {
             // yes: print as string
+            dsk_buffer_append_byte (out, '"');
+            dsk_buffer_append (out, ev->name->length, dbcc_symbol_get_string (ev->name));
+            dsk_buffer_append_byte (out, '"');
+          }
+        else
+          {
+            // no: print as [typename, value]
+      
+            dsk_buffer_append_string (out, "[\"");
+            if (type->v_enum.tag != NULL)
+              dsk_buffer_append_string (out, dbcc_symbol_get_string (type->v_enum.tag));
+            dsk_buffer_append_string (out, "\",");
+            dsk_buffer_printf (out, "%lld", (long long) v);
+            dsk_buffer_append_byte (out, ']');
+          }
+      }
+      break;
+    case DBCC_TYPE_METATYPE_ARRAY:
+      {
+        DBCC_Type *elt_type = type->v_array.element_type;
+        size_t n = type->v_array.n_elements < 0 ? 0 : type->v_array.n_elements;
+        const char *at = value;
+        dsk_buffer_append_byte (out, '[');
+        for (size_t i = 0; i < n; i++, at += elt_type->base.sizeof_instance)
+          {
+            if (i > 0)
+              dsk_buffer_append_byte (out, ',');
+            if (!dbcc_type_value_to_json (elt_type, at, out, error))
+              return false;
+          }
+        dsk_buffer_append_byte (out, ']');
+        return true;
+      }
+    case DBCC_TYPE_METATYPE_STRUCT:
+      for (size_t i = 0; i < type->v_struct.n_members; i++)
+        if (type->v_struct.members[i].is_bitfield)
+          {
             ...
           }
         else
           {
-            // no print as pair
             ...
           }
-      }
-      ... otherwise, print as [typename, value]
       break;
-    case DBCC_TYPE_METATYPE_ARRAY:
-      ...
-    case DBCC_TYPE_METATYPE_VARIABLE_LENGTH_ARRAY:
-      assert(false);
-      break;
-    case DBCC_TYPE_METATYPE_STRUCT:
-      ...
     case DBCC_TYPE_METATYPE_UNION:
       ...
     case DBCC_TYPE_METATYPE_ENUM:
       ...
     case DBCC_TYPE_METATYPE_POINTER:
-      ...
+      return false;
     case DBCC_TYPE_METATYPE_TYPEDEF:
-      ...
+      // TODO: should pass typedef-name to help with anon structs etc
+      return dbcc_type_value_to_json (type->v_typedef.underlying_type,
+                                      value, out, error);
     case DBCC_TYPE_METATYPE_BITFIELD:
       ...
     case DBCC_TYPE_METATYPE_QUALIFIED:
@@ -910,7 +947,9 @@ dbcc_type_value_to_json(DBCC_Type   *type,
                                       value, 
                                       out, error);
     default:
-      *error = ...
+      *error = dbcc_error_new (DBCC_ERROR_UNSERIALIZABLE,
+                               "cannot convert type of metatype '%s' to JSON",
+                               dbcc_type_metatype_name (type->metatype));
       return false;
     }
 }

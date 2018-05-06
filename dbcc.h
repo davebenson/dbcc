@@ -131,6 +131,7 @@ struct DBCC_Param
 {
   DBCC_Type *type;
   DBCC_Symbol *name;
+  int bit_width;                // -1 usually, >= 0 for bit-fields
 };
 
 #include "dbcc-type.h"

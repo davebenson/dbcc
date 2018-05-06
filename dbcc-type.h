@@ -95,6 +95,10 @@ typedef struct {
   DBCC_Type *type;
   DBCC_Symbol *name;
   size_t offset;
+
+  bool is_bitfield;
+  uint8_t bit_length;
+  uint8_t bit_offset;           /* max size is 8*type->sizeof_instance - 1 */
 } DBCC_TypeStructMember;
 struct DBCC_TypeStruct
 {
@@ -109,6 +113,10 @@ struct DBCC_TypeStruct
 typedef struct {
   DBCC_Type *type;
   DBCC_Symbol *name;
+
+  bool is_bitfield;
+  uint8_t bit_length;
+  uint8_t bit_offset;           /* max size is 8*type->sizeof_instance - 1 */
 } DBCC_TypeUnionBranch;
 struct DBCC_TypeUnion
 {
@@ -134,7 +142,7 @@ struct DBCC_TypePointer
 struct DBCC_TypeTypedef
 {
   DBCC_Type_Base base;
-  DBCC_Type *aliased_type;
+  DBCC_Type *underlying_type;
 };
 struct DBCC_TypeQualified
 {
@@ -183,6 +191,8 @@ DBCC_Type *dbcc_type_new_enum (DBCC_TargetEnvironment *target_env,
                                size_t           n_values,
                                DBCC_EnumValue  *values,
                                DBCC_Error     **error);
+DBCC_EnumValue *dbcc_type_enum_lookup_value (DBCC_Type *type,
+                                             int64_t value);
 DBCC_Type *dbcc_type_new_pointer (DBCC_TargetEnvironment *target_env,
                                   DBCC_Type     *target);
 DBCC_Type *dbcc_type_new_array   (DBCC_TargetEnvironment *target,

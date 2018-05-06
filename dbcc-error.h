@@ -56,6 +56,9 @@ typedef enum
   DBCC_ERROR_STRUCT_DUPLICATES,
   DBCC_ERROR_ENUM_DUPLICATES,
 
+  /* JSON errors */
+  DBCC_ERROR_UNSERIALIZABLE,
+
   /* type-checking errors */
   
   /* type-checking errors */

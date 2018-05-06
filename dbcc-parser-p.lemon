@@ -269,11 +269,20 @@ context_new_union               (P_Context         *context,
           dbcc_error_add_code_position (context->error, cp);
           return NULL;
         }
-      dbcc_type_complete_union (rv, n_params, params);
+      if (!dbcc_type_complete_union (context->target_env,
+                                     rv,
+                                     n_params, params,
+                                     &context->error))
+        {
+          dbcc_error_add_code_position (context->error, cp);
+          return NULL;
+        }
     }
   else
     {
-      rv = dbcc_type_new_union (tag, n_params, params, &context->error);
+      rv = dbcc_type_new_union (context->target_env,
+                                tag, n_params, params,
+                                &context->error);
       if (rv == NULL)
         {
           dbcc_error_add_code_position (context->error, cp);
