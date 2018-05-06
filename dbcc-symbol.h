@@ -53,3 +53,5 @@ DBCC_INLINE const char *dbcc_symbol_get_string (const DBCC_Symbol *symbol)
 {
   return (const char *) (symbol + 1);
 }
+
+#define dbcc_symbol_unref(s) do{}while(0)

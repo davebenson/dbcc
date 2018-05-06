@@ -1,3 +1,8 @@
 dbcc-parser-p.c
 dbcc-parser-p.h
 dbcc-parser-p.out
+cpp-expr-evaluate-p.c
+cpp-expr-evaluate-p.h
+cpp-expr-evaluate-p.out
+libdbcc.a
+*.o

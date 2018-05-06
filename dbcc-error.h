@@ -2,17 +2,6 @@ typedef struct DBCC_Error DBCC_Error;
 typedef struct DBCC_ErrorList DBCC_ErrorList;
 typedef struct DBCC_ErrorNode DBCC_ErrorNode;
 
-struct DBCC_ErrorNode
-{
-  DBCC_ErrorNode *next;
-  DBCC_Error *error;
-};
-struct DBCC_ErrorList
-{
-  DBCC_Error *first_error;
-  DBCC_Error *last_error;
-};
-
 typedef enum
 {
   /* Preprocessing / lexing/tokenizing Errors */
@@ -62,27 +51,41 @@ typedef enum
   DBCC_ERROR_EXPECTED_EXPRESSION,
   DBCC_ERROR_BAD_OPERATOR,
 
+  /* type-sanity errors */
+  DBCC_ERROR_STRUCT_EMPTY,
+  DBCC_ERROR_STRUCT_DUPLICATES,
+  DBCC_ERROR_ENUM_DUPLICATES,
+
   /* type-checking errors */
   
   /* type-checking errors */
 } DBCC_ErrorCode;
 
+const char *dbcc_error_code_name (DBCC_ErrorCode code);
 
 typedef enum
 {
-  DBCC_ERROR_DATA_TYPE_CAUSES
+  DBCC_ERROR_DATA_TYPE_CAUSE,
+  DBCC_ERROR_DATA_TYPE_CODE_POSITION,
 } DBCC_ErrorDataType;
 typedef struct DBCC_Error DBCC_Error;
 typedef struct DBCC_ErrorData DBCC_ErrorData;
+typedef struct DBCC_ErrorData_Cause DBCC_ErrorData_Cause;
+typedef struct DBCC_ErrorData_CodePosition DBCC_ErrorData_CodePosition;
 struct DBCC_ErrorData
 {
   DBCC_ErrorDataType type;
   DBCC_ErrorData *next;
 };
-struct DBCC_ErrorData_Causes
+struct DBCC_ErrorData_Cause
 {
   DBCC_ErrorData base;
-  DBCC_ErrorList causes;
+  DBCC_Error *error;
+};
+struct DBCC_ErrorData_CodePosition
+{
+  DBCC_ErrorData base;
+  DBCC_CodePosition *code_position;
 };
 
 struct DBCC_Error

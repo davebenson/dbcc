@@ -35,8 +35,8 @@ struct DBCC_Statement_Base
 struct DBCC_CompoundStatement
 {
   DBCC_Statement_Base base;
-  DBCC_Statement *first_statements;
-  DBCC_Statement *last_statements;
+  unsigned n_statements;
+  DBCC_Statement **statements;
 };
 
 struct DBCC_ForStatement
@@ -74,9 +74,8 @@ struct DBCC_IfStatement
 struct DBCC_GotoStatement
 {
   DBCC_Statement_Base base;
-  DBCC_Expr *condition;
-  DBCC_Statement *body;
-  DBCC_Statement *else_clause;
+  DBCC_Symbol *label;
+  DBCC_Statement *target;               // if resolved
 };
 
 struct DBCC_LabelStatement

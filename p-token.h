@@ -20,9 +20,6 @@ struct P_Token
   int token_type;
 
   union {
-    // only used for the following token types:
-    //     IDENTIFIER
-    //     TYPEDEF_NAME
     DBCC_Symbol *v_identifier;
     struct {
       DBCC_Symbol *name;

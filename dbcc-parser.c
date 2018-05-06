@@ -35,7 +35,6 @@
 
 #include "dbcc.h"
 #include "dbcc-dsk.h"
-#include "dbcc-parser.h"
 #include "dbcc-parser-lemon.h"
 #include "dbcc-parser-p.h"
 #include "p-token.h"
@@ -59,6 +58,20 @@
  * Combines two ASCII characters into an integer.
  */
 #define COMBINE_2_CHARS(a,b)   ((((a) & 0xff) << 8) | ((b) & 0xff))
+
+typedef struct DBCC_Parser_Handlers DBCC_Parser_Handlers;
+struct DBCC_Parser_Handlers
+{
+  void (*handle_statement)(DBCC_Statement *stmt,
+                           void           *handler_data);
+
+  /* Takes ownership of 'error',
+   * so it must call dbcc_error_unref() eventually.
+   */
+  void (*handle_error)    (DBCC_Error     *error,
+                           void           *handler_data);
+  void (*handle_destroy)  (void           *handler_data);
+};
 
 
 typedef enum
@@ -210,13 +223,14 @@ struct DBCC_Parser
 
 
 DBCC_Parser *
-dbcc_parser_new             (DBCC_Parser_Handlers *handlers,
-                             void          *handler_data)
+dbcc_parser_new             (DBCC_Parser_NewOptions *new_options)
 {
   DBCC_Parser *rv = malloc (sizeof (DBCC_Parser));
   rv->magic = DBCC_PARSER_MAGIC;
-  rv->handlers = *handlers;
-  rv->handler_data = handler_data;
+  rv->handlers.handle_statement = new_options->handle_statement;
+  rv->handlers.handle_error = new_options->handle_error;
+  rv->handlers.handle_destroy = new_options->handle_destroy;
+  rv->handler_data = new_options->handler_data;
   dsk_buffer_init (&rv->buffer);
   rv->globals = dbcc_namespace_new_global ();
   rv->context = p_context_new (rv->globals);

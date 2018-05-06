@@ -6,9 +6,10 @@ typedef union DBCC_Expr DBCC_Expr;
 typedef struct DBCC_Expr_Base DBCC_Expr_Base;
 typedef struct DBCC_BinaryOperatorExpr DBCC_BinaryOperatorExpr;
 typedef struct DBCC_UnaryOperatorExpr DBCC_UnaryOperatorExpr;
+typedef struct DBCC_TernaryOperatorExpr DBCC_TernaryOperatorExpr;
 typedef struct DBCC_SubscriptExpr DBCC_SubscriptExpr;
-typedef struct DBCC_DereferenceExpr DBCC_DereferenceExpr;
 typedef struct DBCC_VariableExpr DBCC_VariableExpr;
+typedef struct DBCC_ConstantExpr DBCC_ConstantExpr;
 typedef struct DBCC_StructuredInitializerPiece DBCC_StructuredInitializerPiece;
 typedef struct DBCC_StructuredInitializer DBCC_StructuredInitializer;
 typedef struct DBCC_StructuredInitializerExpr DBCC_StructuredInitializerExpr;
@@ -20,8 +21,6 @@ typedef enum
   DBCC_EXPR_TYPE_TERNARY_OP,
   DBCC_EXPR_TYPE_CONSTANT,
   DBCC_EXPR_TYPE_SUBSCRIPT,
-  DBCC_EXPR_TYPE_DEREFERENCE,
-  DBCC_EXPR_TYPE_REFERENCE,
 } DBCC_Expr_Type;
 
 struct DBCC_Expr_Base
@@ -42,8 +41,16 @@ struct DBCC_BinaryOperatorExpr
 struct DBCC_UnaryOperatorExpr
 {
   DBCC_Expr_Base base;
-  DBCC_BinaryOperator op;
+  DBCC_UnaryOperator op;
   DBCC_Expr *a;
+};
+
+struct DBCC_TernaryOperatorExpr
+{
+  DBCC_Expr_Base base;
+  DBCC_Expr *condition;
+  DBCC_Expr *a;
+  DBCC_Expr *b;
 };
 
 struct DBCC_SubscriptExpr
@@ -51,12 +58,6 @@ struct DBCC_SubscriptExpr
   DBCC_Expr_Base base;
   DBCC_Expr *ptr;
   DBCC_Expr *index;
-};
-
-struct DBCC_DereferenceExpr
-{
-  DBCC_Expr_Base base;
-  DBCC_Expr *ptr;
 };
 
 struct DBCC_VariableExpr
@@ -69,7 +70,10 @@ union DBCC_Expr
 {
   DBCC_Expr_Type expr_type;
   DBCC_Expr_Base base;
-  DBCC_DereferenceExpr v_dereference;
+  DBCC_UnaryOperatorExpr v_unary;
+  DBCC_BinaryOperatorExpr v_binary;
+  DBCC_TernaryOperatorExpr v_ternary;
+  DBCC_SubscriptExpr v_subscript;
 };
 
 typedef struct DBCC_GenericAssociation DBCC_GenericAssociation;
@@ -158,13 +162,6 @@ DBCC_Expr *dbcc_expr_new_structured_initializer
                                           (DBCC_Type          *type,
                                            DBCC_StructuredInitializer *init);
 
-struct DBCC_TernaryExpr
-{
-  DBCC_Expr_Base base;
-  DBCC_Expr *cond;
-  DBCC_Expr *a;
-  DBCC_Expr *b;
-};
 DBCC_Expr *dbcc_expr_new_ternary (DBCC_Expr *cond,
                                   DBCC_Expr *a,
                                   DBCC_Expr *b);

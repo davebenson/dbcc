@@ -13,11 +13,17 @@ typedef struct DBCC_TargetEnvironment DBCC_TargetEnvironment;
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#include "dsk/dsk.h"
 #include "dbcc-symbol.h"
 #include "dbcc-code-position.h"
 #include "dbcc-error.h"
 #include "dbcc-ptr-table.h"
 #include "dbcc-target-environment.h"
+
+#define DBCC_ALIGN(offset, align) \
+   ( ((offset) + (align) - 1) & (~(size_t)((align) - 1)) )
+#define DBCC_NEW_ARRAY(n, type)   ((type *)(malloc(sizeof(type) * (n))))
+#define DBCC_NEW(type)   ((type *)(malloc(sizeof(type))))
 
 typedef enum
 {
@@ -132,6 +138,7 @@ struct DBCC_Param
 #include "dbcc-statement.h"
 #include "dbcc-namespace.h"
 #include "dbcc-common.h"
+#include "dbcc-parser.h"
 
 #if 0
 // The C Grammar we use defines a Declaration as a tricky beast with a list of "Declarators",

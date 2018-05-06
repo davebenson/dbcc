@@ -148,6 +148,7 @@ struct P_Context
   DBCC_Error *error;
   DBCC_Namespace *globals;
   DBCC_Namespace *locals;
+  DBCC_TargetEnvironment *target_env;
   int next_enum_value;
 };
 #define P_CONTEXT_NAMESPACE(context) \
@@ -218,7 +219,7 @@ context_new_struct               (P_Context         *context,
   rv = dbcc_namespace_lookup_struct_tag (ns, tag);
   if (rv != NULL)
     {
-      if (rv->base.complete)
+      if (!rv->v_struct.incomplete)
         {
           context->error = dbcc_error_new (DBCC_ERROR_MULTIPLE_DEFINITION,
                                            "struct %s multiply defined",
@@ -226,11 +227,18 @@ context_new_struct               (P_Context         *context,
           dbcc_error_add_code_position (context->error, cp);
           return NULL;
         }
-      dbcc_type_complete_struct (rv, n_params, params);
+      if (!dbcc_type_complete_struct (context->target_env, rv, n_params, params, &context->error))
+        {
+          dbcc_error_add_code_position (context->error, cp);
+          return NULL;
+        }
     }
   else
     {
-      rv = dbcc_type_new_struct (tag, n_params, params, &context->error);
+      rv = dbcc_type_new_struct (context->target_env,
+                                 tag,
+                                 n_params, params,
+                                 &context->error);
       if (rv == NULL)
         {
           dbcc_error_add_code_position (context->error, cp);
@@ -253,7 +261,7 @@ context_new_union               (P_Context         *context,
   rv = dbcc_namespace_lookup_union_tag (ns, tag);
   if (rv != NULL)
     {
-      if (rv->base.complete)
+      if (!rv->v_struct.incomplete)
         {
           context->error = dbcc_error_new (DBCC_ERROR_MULTIPLE_DEFINITION,
                                            "union %s multiply defined",
@@ -1475,7 +1483,8 @@ declarator_modify_type (P_Context *context,
     case P_DECLARATOR_TYPE_NAME:
       return base_type;
     case P_DECLARATOR_TYPE_POINTER:
-      return dbcc_type_new_pointer (base_type, declarator->v_pointer.qualifiers);
+      return dbcc_type_new_pointer (context->target_env,
+                                    base_type);
     case P_DECLARATOR_TYPE_ARRAY:
       {
         size_t count = 0;
@@ -1498,13 +1507,13 @@ declarator_modify_type (P_Context *context,
                                                  dbcc_symbol_get_string (size_expr->base.value_type->base.name));
                 return NULL;
               }
-            return dbcc_type_new_array (declarator->v_array.qualifiers,
+            return dbcc_type_new_array (context->target_env,
                                         count,
                                         base_type);
           }
       }
     case P_DECLARATOR_TYPE_VARLEN_ARRAY:
-      return dbcc_type_new_varlen_array (declarator->v_varlen_array.qualifiers,
+      return dbcc_type_new_varlen_array (context->target_env,
                                          base_type);
     case P_DECLARATOR_TYPE_BITFIELD:
       {
@@ -2370,7 +2379,7 @@ type_specifier(rv) ::= IMAGINARY.
 type_specifier(rv) ::= ATOMIC LPAREN type_name(nonatomic_type) RPAREN.
         { rv = P_TYPE_SPECIFIERS_INIT;
           rv.counts[P_TYPE_SPECIFIERS_INDEX_ATOMIC]++;
-          rv.type = dbcc_type_new_atomic (nonatomic_type);
+          rv.type = dbcc_type_new_qualified (nonatomic_type, DBCC_TYPE_QUALIFIER_ATOMIC);
           if (rv.type == NULL)
             {
               context->error = dbcc_error_new (DBCC_ERROR_NONATOMIC,
@@ -2503,11 +2512,11 @@ enum_specifier(rv) ::= ENUM opt_identifier(id) LBRACE enumerator_list(list) opt_
           for (P_EnumValueNode *e = list.first; e != NULL; e = e->next)
             n_values++;
           unsigned i = 0;
-          DBCC_EnumValue **evalues = malloc (sizeof(DBCC_EnumValue*) * n_values);
-
+          DBCC_EnumValue *evalues = DBCC_NEW_ARRAY(n_values, DBCC_EnumValue);
           for (P_EnumValueNode *e = list.first; e != NULL; e = e->next, i++)
-            evalues[i] = e->enum_value;
-          rv = dbcc_type_new_enum (id, n_values, evalues);
+            evalues[i] = *e->enum_value;
+          DBCC_Error *error = NULL;
+          rv = dbcc_type_new_enum (context->target_env, id, n_values, evalues, &error);
           p_enumerator_list_clear (&list);
         }
 
