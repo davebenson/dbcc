@@ -30,6 +30,8 @@ struct DBCC_Namespace
   DBCC_PtrTable enum_tag_symbols;
   DBCC_PtrTable union_tag_symbols;
 
+  DBCC_TargetEnvironment *target_env;
+
   DBCC_Namespace *chain;                /* if lookups fail, go to parent */
 };
 
@@ -69,9 +71,15 @@ DBCC_Type * dbcc_namespace_get_float_imaginary_type   (DBCC_Namespace *ns);
 DBCC_Type * dbcc_namespace_get_double_imaginary_type  (DBCC_Namespace *ns);
 DBCC_Type * dbcc_namespace_get_long_double_imaginary_type (DBCC_Namespace *ns);
 
+/* Fixed-width types. */
+DBCC_Type * dbcc_namespace_get_integer_type           (DBCC_Namespace  *ns,
+                                                       bool is_signed,
+                                                       unsigned size);
+
+/* ... */
 DBCC_Type * dbcc_namespace_get_char_type              (DBCC_Namespace *);
-DBCC_Type * dbcc_namespace_get_double_type            (DBCC_Namespace *);
 DBCC_Type * dbcc_namespace_get_float_type             (DBCC_Namespace *);
+DBCC_Type * dbcc_namespace_get_double_type            (DBCC_Namespace *);
 DBCC_Type * dbcc_namespace_get_long_double_type       (DBCC_Namespace *);
 DBCC_Type * dbcc_namespace_get_long_long_type         (DBCC_Namespace *);
 DBCC_Type * dbcc_namespace_get_long_type              (DBCC_Namespace *);
@@ -84,3 +92,10 @@ DBCC_Type * dbcc_namespace_get_unsigned_short_type    (DBCC_Namespace *);
 DBCC_Type * dbcc_namespace_get_unsigned_short_type    (DBCC_Namespace *);
 DBCC_Type * dbcc_namespace_get_int_type               (DBCC_Namespace *);
 DBCC_Type * dbcc_namespace_get_sizet_type             (DBCC_Namespace *);
+
+DBCC_Type * dbcc_namespace_get_imaginary_float_type   (DBCC_Namespace *);
+DBCC_Type * dbcc_namespace_get_imaginary_double_type  (DBCC_Namespace *);
+DBCC_Type * dbcc_namespace_get_imaginary_long_double_type(DBCC_Namespace *);
+DBCC_Type * dbcc_namespace_get_complex_float_type     (DBCC_Namespace *);
+DBCC_Type * dbcc_namespace_get_complex_double_type    (DBCC_Namespace *);
+DBCC_Type * dbcc_namespace_get_complex_long_double_type(DBCC_Namespace *);

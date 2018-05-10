@@ -1,6 +1,5 @@
 #include "dbcc.h"
 
-
 /* Resize if 
  *
  *        table size 
@@ -161,6 +160,8 @@ dbcc_symbol_ref (DBCC_Symbol *symbol)
 {
   return symbol;
 }
+
+#undef dbcc_symbol_unref
 void
 dbcc_symbol_unref (DBCC_Symbol *symbol)
 {

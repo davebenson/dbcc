@@ -1677,7 +1677,11 @@ type_from_parts (P_Context *context,
     return NULL;
   DBCC_TypeQualifier q = declaration->v_declaration.qualifiers;
   if (q != 0)
-    type = dbcc_type_new_qualified (type, q);
+    {
+      type = dbcc_type_new_qualified (context->target_env, type, q, &context->error);
+      if (type == NULL)
+        return NULL;
+    }
 
   // storage-class-specifiers and function-specifiers do not make new types
 
@@ -2111,7 +2115,9 @@ unary_expression(rv) ::= SIZEOF unary_expression(expr).
 unary_expression(rv) ::= SIZEOF LPAREN type_name(type) RPAREN.
         { rv = dbcc_expr_new_sizeof_type(type); }
 unary_expression(rv) ::= ALIGNOF LPAREN type_name(type) RPAREN.
-        { rv = dbcc_expr_new_alignof_type(type); }
+        { rv = dbcc_expr_new_alignof_type(context->target_env, type, &context->error);
+          if (rv == NULL) FAIL();
+        }
 
 unary_operator(rv) ::= AMPERSAND.
         { rv = DBCC_UNARY_OPERATOR_REFERENCE; }
@@ -2388,12 +2394,9 @@ type_specifier(rv) ::= IMAGINARY.
 type_specifier(rv) ::= ATOMIC LPAREN type_name(nonatomic_type) RPAREN.
         { rv = P_TYPE_SPECIFIERS_INIT;
           rv.counts[P_TYPE_SPECIFIERS_INDEX_ATOMIC]++;
-          rv.type = dbcc_type_new_qualified (nonatomic_type, DBCC_TYPE_QUALIFIER_ATOMIC);
+          rv.type = dbcc_type_new_qualified (context->target_env, nonatomic_type, DBCC_TYPE_QUALIFIER_ATOMIC, &context->error);
           if (rv.type == NULL)
             {
-              context->error = dbcc_error_new (DBCC_ERROR_NONATOMIC,
-                                               "cannot make a nonatomic type from %s",
-                                               dbcc_type_to_cstring (nonatomic_type));
               FAIL();
             }
         }

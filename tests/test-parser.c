@@ -75,7 +75,7 @@ dump_statement_json (DBCC_Statement *stmt, void *handler_data)
         printf(",\"condition\":");
         dump_expr_json_or_null (stmt->v_for.condition, handler_data);
         printf(",\"next\":");
-        dump_statement_json_or_null (stmt->v_for.next, handler_data);
+        dump_statement_json_or_null (stmt->v_for.advance, handler_data);
         printf(",\"body\":");
         dump_statement_json_or_null (stmt->v_for.body, handler_data);
         printf("}");
@@ -95,8 +95,8 @@ dump_statement_json (DBCC_Statement *stmt, void *handler_data)
         printf("}");
         break;
       case DBCC_STATEMENT_SWITCH:
-        printf("{\"type\":\"switch\",\"condition\":");
-        dump_expr_json_or_null (stmt->v_switch.condition, handler_data);
+        printf("{\"type\":\"switch\",\"value\":");
+        dump_expr_json_or_null (stmt->v_switch.value_expr, handler_data);
         printf(",\"body\":");
         dump_statement_json (stmt->v_switch.body, handler_data);
         printf("}");
@@ -107,7 +107,7 @@ dump_statement_json (DBCC_Statement *stmt, void *handler_data)
         printf(",\"body\":");
         dump_statement_json_or_null (stmt->v_if.body, handler_data);
         printf(",\"else\":");
-        dump_statement_json_or_null (stmt->v_if.else_clause, handler_data);
+        dump_statement_json_or_null (stmt->v_if.else_body, handler_data);
         printf("}");
         break;
       case DBCC_STATEMENT_GOTO:
@@ -177,6 +177,9 @@ dump_type_json (DBCC_Type *type, void *handler_data)
 {
   switch (type->metatype)
   {
+  case DBCC_TYPE_METATYPE_VOID:
+    printf("\"void\"");
+    break;
   case DBCC_TYPE_METATYPE_INT:
     printf("\"%sint%u\"",
            type->v_int.is_signed ? "" : "u",
@@ -261,8 +264,34 @@ dump_type_json (DBCC_Type *type, void *handler_data)
   case DBCC_TYPE_METATYPE_TYPEDEF:
     printf("{\"metatype\":\"pointer\",\"alias\":\"%s\",\"aliased_type\":",
              dbcc_symbol_get_string (type->base.name));
-    dump_type_json (type->v_typedef.aliased_type, handler_data);
+    dump_type_json (type->v_typedef.underlying_type, handler_data);
     printf("}");
+    break;
+  case DBCC_TYPE_METATYPE_QUALIFIED:
+    printf("{\"metatype\":\"qualfied\",\"restrict\":%s,\"const\":%s,\"atomic\":%s,\"volatile\":%s,\"subtype\":",
+           (type->v_qualified.qualifiers & DBCC_TYPE_QUALIFIER_RESTRICT) ? "true" : "false",
+           (type->v_qualified.qualifiers & DBCC_TYPE_QUALIFIER_CONST) ? "true" : "false",
+           (type->v_qualified.qualifiers & DBCC_TYPE_QUALIFIER_ATOMIC) ? "true" : "false",
+           (type->v_qualified.qualifiers & DBCC_TYPE_QUALIFIER_VOLATILE) ? "true" : "false");
+    dump_type_json (type->v_qualified.underlying_type, handler_data);
+    printf("}");
+    break;
+
+  case DBCC_TYPE_METATYPE_FUNCTION:
+    printf("{\"metatype\":\"function\",\"return_type\":");
+    dump_type_json (type->v_function.return_type, handler_data);
+    printf(",arguments:[");
+    for (unsigned i = 0; i < type->v_function.n_params; i++)
+      {
+        if (i > 0)
+          printf(",");
+        printf("{\"type\":");
+        dump_type_json (type->v_function.params[i].type, handler_data);
+        printf("{,\"name\":\"%s\"}",
+               dbcc_symbol_get_string (type->v_function.params[i].name));
+      }
+    printf("], has_varargs: %s}",
+           type->v_function.has_varargs ? "true" : "false");
     break;
   }
 }

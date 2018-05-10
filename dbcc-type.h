@@ -29,10 +29,11 @@ typedef enum
   DBCC_TYPE_METATYPE_ENUM,
   DBCC_TYPE_METATYPE_POINTER,
   DBCC_TYPE_METATYPE_TYPEDEF,
-  DBCC_TYPE_METATYPE_BITFIELD,
   DBCC_TYPE_METATYPE_QUALIFIED,         // includes _Atomic
   DBCC_TYPE_METATYPE_FUNCTION
 } DBCC_Type_Metatype;
+
+const char * dbcc_type_metatype_name (DBCC_Type_Metatype metatype);
 struct DBCC_Type_Base
 {
   DBCC_Type_Metatype metatype;
@@ -76,6 +77,7 @@ struct DBCC_TypeEnum
 {
   DBCC_Type_Base base;
   DBCC_Symbol *tag;
+  bool is_signed;
   size_t n_values;
   DBCC_EnumValue *values;
 };
@@ -208,8 +210,10 @@ DBCC_Type *dbcc_type_new_function (DBCC_Type          *rettype,
                                    DBCC_Param         *params,
                                    bool                has_varargs);
 
-DBCC_Type *dbcc_type_new_qualified(DBCC_Type          *base_type,
-                                   DBCC_TypeQualifier  qualifiers);
+DBCC_Type *dbcc_type_new_qualified(DBCC_TargetEnvironment *env,
+                                   DBCC_Type              *base_type,
+                                   DBCC_TypeQualifier      qualifiers,
+                                   DBCC_Error            **error);
 
 DBCC_Type *dbcc_type_new_struct   (DBCC_TargetEnvironment *env,
                                    DBCC_Symbol        *tag,
@@ -248,4 +252,28 @@ bool dbcc_type_value_to_json (DBCC_Type   *type,
                               DBCC_Error **error);
 
 DBCC_Type *dbcc_type_dequalify (DBCC_Type *type);
+
+
+// Can the type be used in a condition expression?
+// (as used in for-loops, if-statements, and do-while-loops)
+bool   dbcc_type_is_scalar (DBCC_Type *type);
+
+// Is enum or int?   This is the condition required by switch-statements.
+bool   dbcc_type_is_integer (DBCC_Type *type);
+
+// Can (most) arithmetic operators be applied to this type?
+// Alternately: does it represent a number?
+// (Enums are considered arithmetic, as well as int and float types.)
+bool   dbcc_type_is_arithmetic (DBCC_Type *type);
+
+// Is this a complex or imaginary floating-point type.?
+bool dbcc_type_is_complex (DBCC_Type *type);
+
+// A qualified- or unqualified-pointer to any type.
+bool dbcc_type_is_pointer (DBCC_Type *type);
+
+// This will do sign-extension as needed.
+// Type must be INT or ENUM.
+uint64_t   dbcc_type_value_to_uint64 (DBCC_Type *type,
+                                      const void *value);
 #endif /* __DBCC_TYPE_H_ */

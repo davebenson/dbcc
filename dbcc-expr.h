@@ -83,7 +83,12 @@ struct DBCC_GenericAssociation
   DBCC_Expr *expr;
 };
 
-DBCC_Expr *dbcc_expr_new_alignof_type     (DBCC_Type          *type);
+DBCC_Expr *dbcc_expr_new_alignof_type     (DBCC_TargetEnvironment *env,
+                                           DBCC_Type          *type,
+                                           DBCC_Error        **error);
+DBCC_Expr *dbcc_expr_new_alignof_expr     (DBCC_TargetEnvironment *env,
+                                           DBCC_Expr          *expr,
+                                           DBCC_Error        **error);
 DBCC_Expr *dbcc_expr_new_binary_operator  (DBCC_BinaryOperator op,
                                            DBCC_Expr          *a,
                                            DBCC_Expr          *b);

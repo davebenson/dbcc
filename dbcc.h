@@ -24,6 +24,8 @@ typedef struct DBCC_TargetEnvironment DBCC_TargetEnvironment;
    ( ((offset) + (align) - 1) & (~(size_t)((align) - 1)) )
 #define DBCC_NEW_ARRAY(n, type)   ((type *)(malloc(sizeof(type) * (n))))
 #define DBCC_NEW(type)   ((type *)(malloc(sizeof(type))))
+#define DBCC_MIN(a,b)    ((a) < (b) ? (a) : (b))
+#define DBCC_MAX(a,b)    ((a) > (b) ? (a) : (b))
 
 typedef enum
 {

@@ -62,9 +62,6 @@ dbcc_type_unref (DBCC_Type *type)
         case DBCC_TYPE_METATYPE_QUALIFIED:
           dbcc_type_unref (type->v_qualified.underlying_type);
           break;
-        case DBCC_TYPE_METATYPE_BITFIELD:
-          dbcc_type_unref (type->v_bitfield.underlying_type);
-          break;
         case DBCC_TYPE_METATYPE_FUNCTION:
           dbcc_type_unref (type->v_function.return_type);
           for (unsigned i = 0; i < type->v_function.n_params; i++)
@@ -161,20 +158,6 @@ dbcc_type_new_varlen_array(DBCC_TargetEnvironment *env,
 }
 
 DBCC_Type *
-dbcc_type_new_bitfield    (unsigned       bit_width,
-                           DBCC_Type     *element_type)
-{
-  DBCC_Type *t = NEW_TYPE(BITFIELD);
-  DBCC_Type *real_type = element_type;
-  if (real_type->metatype == DBCC_TYPE_METATYPE_QUALIFIED)
-    real_type = real_type->v_qualified.underlying_type;
-  assert (real_type->metatype == DBCC_TYPE_METATYPE_INT);
-  t->v_bitfield.underlying_type = dbcc_type_ref (element_type);
-  t->v_bitfield.bit_width = bit_width;
-  return t;
-}
-
-DBCC_Type *
 dbcc_type_new_function  (DBCC_Type          *rettype,
                          size_t              n_params,
                          DBCC_Param         *params,
@@ -195,8 +178,10 @@ dbcc_type_new_function  (DBCC_Type          *rettype,
   return t;
 }
 
-DBCC_Type *dbcc_type_new_qualified(DBCC_Type          *base_type,
-                                   DBCC_TypeQualifier  qualifiers)
+DBCC_Type *dbcc_type_new_qualified(DBCC_TargetEnvironment *env,
+                                   DBCC_Type              *base_type,
+                                   DBCC_TypeQualifier      qualifiers,
+                                   DBCC_Error            **error)
 {
   if (qualifiers == 0)
     return dbcc_type_ref (base_type);
@@ -212,6 +197,36 @@ DBCC_Type *dbcc_type_new_qualified(DBCC_Type          *base_type,
           base_type = base_type->v_qualified.underlying_type;
         }
     }
+
+  /* 6.7.3p2: "Types other than pointer types whose referenced
+   *           type is an object type shall not be restrict-qualified." */
+  if ((qualifiers & DBCC_TYPE_QUALIFIER_RESTRICT) != 0)
+    {
+      if (base_type->metatype != DBCC_TYPE_METATYPE_POINTER)
+        {
+          *error = dbcc_error_new (DBCC_ERROR_BAD_RESTRICTED_TYPE,
+                                   "restrict can only be used with pointers");
+          return NULL;
+        }
+     }
+
+  /* 6.7.3p3: "The type modified by the _Atomic qualifier
+   *           shall not be an array type or a function type." */
+  if ((qualifiers & DBCC_TYPE_QUALIFIER_ATOMIC) != 0)
+    {
+      if (base_type->metatype == DBCC_TYPE_METATYPE_FUNCTION
+       || base_type->metatype == DBCC_TYPE_METATYPE_ARRAY
+       || base_type->metatype == DBCC_TYPE_METATYPE_VARIABLE_LENGTH_ARRAY)
+        {
+          *error = dbcc_error_new (DBCC_ERROR_BAD_ATOMIC_TYPE,
+                                   "arrays and functions must not be atomic");
+          return NULL;
+        }
+    }
+
+  //TODO: verify that type is allowed for target architecture
+  (void) env;
+
   DBCC_Type *t = NEW_TYPE(QUALIFIED);
   t->base.sizeof_instance = base_type->base.sizeof_instance;
   t->v_qualified.qualifiers = qualifiers;
@@ -775,6 +790,39 @@ dbcc_cast_value (DBCC_Type  *dst_type,
 #undef COMBINE_METATYPES
 }
 
+static inline bool
+is_signed_int_type (DBCC_Type *mt)
+{
+// XXX: what about enums!?!
+  return mt->metatype == DBCC_TYPE_METATYPE_INT && mt->v_int.is_signed;
+}
+
+static void
+render_enum_value_as_json  (DBCC_Type *enum_type,
+                            int64_t    value,
+                            DskBuffer *out)
+{
+  DBCC_EnumValue *ev = dbcc_type_enum_lookup_value (enum_type, value);
+  if (ev == NULL)
+    {
+      // yes: print as string
+      dsk_buffer_append_byte (out, '"');
+      dsk_buffer_append (out, ev->name->length, dbcc_symbol_get_string (ev->name));
+      dsk_buffer_append_byte (out, '"');
+    }
+  else
+    {
+      // no: print as [typename, value]
+
+      dsk_buffer_append_string (out, "[\"");
+      if (enum_type->v_enum.tag != NULL)
+        dsk_buffer_append_string (out, dbcc_symbol_get_string (enum_type->v_enum.tag));
+      dsk_buffer_append_string (out, "\",");
+      dsk_buffer_printf (out, "%lld", (long long) value);
+      dsk_buffer_append_byte (out, ']');
+    }
+}
+
 bool
 dbcc_type_value_to_json(DBCC_Type   *type,
                         const char  *value,
@@ -867,42 +915,6 @@ dbcc_type_value_to_json(DBCC_Type   *type,
           assert(0);
         }
       return true;
-    case DBCC_TYPE_METATYPE_ENUM:
-      {
-        // get value
-        // XXX: Justify using signed enum values?
-        int64_t v;
-        switch (type->base.sizeof_instance)
-          {
-          case 1: v = * (int8_t *) value; break;
-          case 2: v = * (int16_t *) value; break;
-          case 4: v = * (int32_t *) value; break;
-          case 8: v = * (int64_t *) value; break;
-          default: assert(false);
-          }
-
-        // does it have a symbol name?
-        DBCC_EnumValue *ev = dbcc_type_enum_lookup_value (type, v);
-        if (ev == NULL)
-          {
-            // yes: print as string
-            dsk_buffer_append_byte (out, '"');
-            dsk_buffer_append (out, ev->name->length, dbcc_symbol_get_string (ev->name));
-            dsk_buffer_append_byte (out, '"');
-          }
-        else
-          {
-            // no: print as [typename, value]
-      
-            dsk_buffer_append_string (out, "[\"");
-            if (type->v_enum.tag != NULL)
-              dsk_buffer_append_string (out, dbcc_symbol_get_string (type->v_enum.tag));
-            dsk_buffer_append_string (out, "\",");
-            dsk_buffer_printf (out, "%lld", (long long) v);
-            dsk_buffer_append_byte (out, ']');
-          }
-      }
-      break;
     case DBCC_TYPE_METATYPE_ARRAY:
       {
         DBCC_Type *elt_type = type->v_array.element_type;
@@ -920,28 +932,99 @@ dbcc_type_value_to_json(DBCC_Type   *type,
         return true;
       }
     case DBCC_TYPE_METATYPE_STRUCT:
+      dsk_buffer_append_byte (out, '{');
+      bool is_first = true;
       for (size_t i = 0; i < type->v_struct.n_members; i++)
-        if (type->v_struct.members[i].is_bitfield)
-          {
-            ...
-          }
-        else
-          {
-            ...
-          }
-      break;
-    case DBCC_TYPE_METATYPE_UNION:
-      ...
+        {
+          // We do not render unnamed fields, which must be bitfields.
+          if (type->v_struct.members[i].name == NULL)
+            {
+              assert(type->v_struct.members[i].is_bitfield);
+              continue;
+            }
+
+          // add comma, if needed
+          if (!is_first)
+            dsk_buffer_append_byte (out, ',');
+          else
+            is_first = false;
+
+          // member name must be in quotes
+          dsk_buffer_append_byte (out, '"');
+          dsk_buffer_append_string (out, dbcc_symbol_get_string (type->v_struct.members[i].name));
+          dsk_buffer_append_small (out, 2, "\":");
+
+          DBCC_TypeStructMember *m = type->v_struct.members + i;
+          DBCC_Type *mt = dbcc_type_dequalify (m->type);
+          void *mv = (char *) value + m->offset;
+          if (m->is_bitfield)
+            {
+              uint64_t v = dbcc_type_value_to_uint64 (m->type, mv);
+              v >>= m->bit_offset;
+              v &= (1ULL << m->bit_length) - 1;
+              if (is_signed_int_type (mt))
+                {
+                  if ((v >> (m->bit_length-1)) == 1)
+                    {
+                      uint64_t mask = (1ULL << m->bit_length) - 1;
+                      v |= ~mask;
+                    }
+                  int64_t vs = v;
+                  switch (mt->metatype)
+                    {
+                    case DBCC_TYPE_METATYPE_ENUM:
+                      {
+                        render_enum_value_as_json (mt, vs, out);
+                        return true;
+                      }
+
+                    case DBCC_TYPE_METATYPE_INT:
+                      dsk_buffer_printf (out, "%lld", (long long) vs);
+                      return true;
+
+                    default:
+                      return false;
+                    }
+                }
+              else
+                {
+                  switch (mt->metatype)
+                    {
+                    case DBCC_TYPE_METATYPE_ENUM:
+                      render_enum_value_as_json (mt, v, out);
+                      return true;
+
+                    case DBCC_TYPE_METATYPE_INT:
+                      dsk_buffer_printf(out, "%llu", (unsigned long long) v);
+                      return true;
+
+                    default:
+                      return false;
+                    }
+                }
+            }
+          else
+            {
+              if (!dbcc_type_value_to_json (m->type, mv, out, error))
+                {
+                  return false;
+                }
+            }
+        }
+      dsk_buffer_append_byte (out, '}');
+      return true;
+
     case DBCC_TYPE_METATYPE_ENUM:
-      ...
-    case DBCC_TYPE_METATYPE_POINTER:
-      return false;
+      {
+        int64_t v = dbcc_type_value_to_uint64 (type, value);
+        render_enum_value_as_json(type, v, out);
+        return true;
+      }
+
     case DBCC_TYPE_METATYPE_TYPEDEF:
       // TODO: should pass typedef-name to help with anon structs etc
       return dbcc_type_value_to_json (type->v_typedef.underlying_type,
                                       value, out, error);
-    case DBCC_TYPE_METATYPE_BITFIELD:
-      ...
     case DBCC_TYPE_METATYPE_QUALIFIED:
       return dbcc_type_value_to_json (type->v_qualified.underlying_type,
                                       value, 
@@ -962,3 +1045,61 @@ dbcc_type_dequalify (DBCC_Type *type)
   else
     return type;
 }
+
+uint64_t
+dbcc_type_value_to_uint64 (DBCC_Type *type, const void *value)
+{
+  bool is_signed;
+  switch (type->metatype)
+    {
+    case DBCC_TYPE_METATYPE_INT:
+      is_signed = type->v_int.is_signed;
+      break;
+
+    case DBCC_TYPE_METATYPE_ENUM:
+      is_signed = true;                         //???
+      break;    
+
+    default:
+      assert(0);
+      return -1;
+    }
+
+  if (is_signed)
+    switch (type->base.sizeof_instance)
+      {
+      case 1: return (uint64_t) (int64_t) * (const int8_t *) value;
+      case 2: return (uint64_t) (int64_t) * (const int16_t *) value;
+      case 4: return (uint64_t) (int64_t) * (const int32_t *) value;
+      case 8: return (uint64_t) (int64_t) * (const int64_t *) value;
+      }
+  else
+    switch (type->base.sizeof_instance)
+      {
+      case 1: return * (const uint8_t *) value;
+      case 2: return * (const uint16_t *) value;
+      case 4: return * (const uint32_t *) value;
+      case 8: return * (const uint64_t *) value;
+      }
+  return -1;    // should not get here
+}
+
+bool
+dbcc_type_is_complex (DBCC_Type *type)
+{
+  if (type->metatype != DBCC_TYPE_METATYPE_FLOAT)
+    return false;
+  switch (type->v_float.float_type)
+    {
+    case DBCC_FLOAT_TYPE_COMPLEX_FLOAT:
+    case DBCC_FLOAT_TYPE_COMPLEX_DOUBLE:
+    case DBCC_FLOAT_TYPE_COMPLEX_LONG_DOUBLE:
+    case DBCC_FLOAT_TYPE_IMAGINARY_FLOAT:
+    case DBCC_FLOAT_TYPE_IMAGINARY_DOUBLE:
+    case DBCC_FLOAT_TYPE_IMAGINARY_LONG_DOUBLE:
+      return true;
+    default:
+      return false;
+    }
+}
+

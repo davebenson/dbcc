@@ -55,12 +55,23 @@ typedef enum
   DBCC_ERROR_STRUCT_EMPTY,
   DBCC_ERROR_STRUCT_DUPLICATES,
   DBCC_ERROR_ENUM_DUPLICATES,
+  DBCC_ERROR_BAD_RESTRICTED_TYPE,
+  DBCC_ERROR_BAD_ATOMIC_TYPE,
+
+  /* semantic constraints */
+  DBCC_ERROR_CASE_DUPLICATE,
+  DBCC_ERROR_BAD_ALIGNOF_ARGUMENT,
+  DBCC_ERROR_BAD_OPERATOR_TYPES,
 
   /* JSON errors */
   DBCC_ERROR_UNSERIALIZABLE,
 
   /* type-checking errors */
+  DBCC_ERROR_EXPR_NOT_CONDITION,
   
+  /* static-evaluation errors */
+  DBCC_ERROR_CASE_EXPR_NONCONSTANT,
+
   /* type-checking errors */
 } DBCC_ErrorCode;
 
@@ -70,6 +81,7 @@ typedef enum
 {
   DBCC_ERROR_DATA_TYPE_CAUSE,
   DBCC_ERROR_DATA_TYPE_CODE_POSITION,
+  //TODO: ErrorDataType that reflects the location in the C11 standard.
 } DBCC_ErrorDataType;
 typedef struct DBCC_Error DBCC_Error;
 typedef struct DBCC_ErrorData DBCC_ErrorData;
