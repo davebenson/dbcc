@@ -91,7 +91,9 @@ DBCC_Type * dbcc_namespace_get_unsigned_long_type     (DBCC_Namespace *);
 DBCC_Type * dbcc_namespace_get_unsigned_short_type    (DBCC_Namespace *);
 DBCC_Type * dbcc_namespace_get_unsigned_short_type    (DBCC_Namespace *);
 DBCC_Type * dbcc_namespace_get_int_type               (DBCC_Namespace *);
-DBCC_Type * dbcc_namespace_get_sizet_type             (DBCC_Namespace *);
+DBCC_Type * dbcc_namespace_get_size_type              (DBCC_Namespace *);
+DBCC_Type * dbcc_namespace_get_ssize_type             (DBCC_Namespace *);
+DBCC_Type * dbcc_namespace_get_ptrdiff_type           (DBCC_Namespace *);
 
 DBCC_Type * dbcc_namespace_get_imaginary_float_type   (DBCC_Namespace *);
 DBCC_Type * dbcc_namespace_get_imaginary_double_type  (DBCC_Namespace *);

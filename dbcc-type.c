@@ -20,6 +20,7 @@ dbcc_type_unref (DBCC_Type *type)
       switch (type->metatype)
         {
         case DBCC_TYPE_METATYPE_VOID: break;
+        case DBCC_TYPE_METATYPE_BOOL: break;
         case DBCC_TYPE_METATYPE_INT: break;
         case DBCC_TYPE_METATYPE_FLOAT: break;
         case DBCC_TYPE_METATYPE_ARRAY:
@@ -1040,10 +1041,15 @@ dbcc_type_value_to_json(DBCC_Type   *type,
 DBCC_Type *
 dbcc_type_dequalify (DBCC_Type *type)
 {
-  if (type->metatype == DBCC_TYPE_METATYPE_QUALIFIED)
-    return type->v_qualified.underlying_type;
-  else
-    return type;
+  for (;;)
+    {
+      if (type->metatype == DBCC_TYPE_METATYPE_QUALIFIED)
+        type = type->v_qualified.underlying_type;
+      else if (type->metatype == DBCC_TYPE_METATYPE_TYPEDEF)
+        type = type->v_typedef.underlying_type;
+      else 
+        return type;
+    }
 }
 
 uint64_t

@@ -43,7 +43,7 @@ typedef enum
   DBCC_BINARY_OPERATOR_SUB,
   DBCC_BINARY_OPERATOR_MUL,
   DBCC_BINARY_OPERATOR_DIV,
-  DBCC_BINARY_OPERATOR_REMAINDER,
+  DBCC_BINARY_OPERATOR_REM,
   DBCC_BINARY_OPERATOR_LT,
   DBCC_BINARY_OPERATOR_LTEQ,
   DBCC_BINARY_OPERATOR_GT,
@@ -60,6 +60,8 @@ typedef enum
   DBCC_BINARY_OPERATOR_COMMA
 } DBCC_BinaryOperator;
 
+#define DBCC_N_BINARY_OPERATORS (DBCC_BINARY_OPERATOR_COMMA+1)
+
 
 typedef enum
 {
@@ -68,6 +70,7 @@ typedef enum
   DBCC_INPLACE_UNARY_OPERATOR_POST_INCR,
   DBCC_INPLACE_UNARY_OPERATOR_POST_DECR,
 } DBCC_InplaceUnaryOperator;
+const char *dbcc_inplace_unary_operator_name (DBCC_InplaceUnaryOperator op);
 
 typedef enum
 {
@@ -83,6 +86,7 @@ typedef enum
   DBCC_INPLACE_BINARY_OPERATOR_XOR_ASSIGN,
   DBCC_INPLACE_BINARY_OPERATOR_OR_ASSIGN,
 } DBCC_InplaceBinaryOperator;
+const char * dbcc_inplace_binary_operator_name (DBCC_InplaceBinaryOperator op);
 
 typedef enum
 {

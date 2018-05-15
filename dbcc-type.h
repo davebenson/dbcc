@@ -4,6 +4,7 @@
 typedef struct DBCC_Type_Base DBCC_Type_Base;
 typedef struct DBCC_TypeVoid DBCC_TypeVoid;
 typedef struct DBCC_TypeInt DBCC_TypeInt;
+typedef struct DBCC_TypeBool DBCC_TypeBool;
 typedef struct DBCC_TypeFloat DBCC_TypeFloat;
 typedef struct DBCC_TypeArray DBCC_TypeArray;
 typedef struct DBCC_TypeVariableLengthArray DBCC_TypeVariableLengthArray;
@@ -16,10 +17,12 @@ typedef struct DBCC_TypeQualified DBCC_TypeQualified;
 typedef struct DBCC_TypeEnum DBCC_TypeEnum;
 typedef struct DBCC_TypeFunctionParam DBCC_TypeFunctionParam;
 typedef struct DBCC_TypeFunction DBCC_TypeFunction;
+typedef struct DBCC_TypeFunctionKR DBCC_TypeFunctionKR;
 
 typedef enum 
 {
   DBCC_TYPE_METATYPE_VOID,
+  DBCC_TYPE_METATYPE_BOOL,
   DBCC_TYPE_METATYPE_INT,
   DBCC_TYPE_METATYPE_FLOAT,
   DBCC_TYPE_METATYPE_ARRAY,
@@ -30,7 +33,8 @@ typedef enum
   DBCC_TYPE_METATYPE_POINTER,
   DBCC_TYPE_METATYPE_TYPEDEF,
   DBCC_TYPE_METATYPE_QUALIFIED,         // includes _Atomic
-  DBCC_TYPE_METATYPE_FUNCTION
+  DBCC_TYPE_METATYPE_FUNCTION,
+  DBCC_TYPE_METATYPE_KR_FUNCTION
 } DBCC_Type_Metatype;
 
 const char * dbcc_type_metatype_name (DBCC_Type_Metatype metatype);
@@ -166,6 +170,13 @@ struct DBCC_TypeFunction
   bool has_varargs;
 };
 
+struct DBCC_TypeFunctionKR
+{
+  DBCC_Type *return_type;
+  unsigned n_params;
+  DBCC_Symbol **params;
+};
+
 union DBCC_Type
 {
   DBCC_Type_Metatype metatype;
@@ -183,6 +194,7 @@ union DBCC_Type
   DBCC_TypeBitfield v_bitfield;
   DBCC_TypeQualified v_qualified;
   DBCC_TypeFunction v_function;
+  DBCC_TypeFunctionKR v_function_kr;
 };
 
 DBCC_Type *dbcc_type_ref   (DBCC_Type *type);
@@ -252,7 +264,11 @@ bool dbcc_type_value_to_json (DBCC_Type   *type,
                               DBCC_Error **error);
 
 DBCC_Type *dbcc_type_dequalify (DBCC_Type *type);
+DBCC_Type *dbcc_type_pointer_dereference (DBCC_Type *type);
+bool dbcc_type_is_incomplete (DBCC_Type *type);
+bool dbcc_types_compatible (DBCC_Type *a, DBCC_Type *b);
 
+bool dbcc_type_implicitly_convertable (DBCC_Type *dst_type, DBCC_Type *src_type);
 
 // Can the type be used in a condition expression?
 // (as used in for-loops, if-statements, and do-while-loops)
@@ -269,11 +285,46 @@ bool   dbcc_type_is_arithmetic (DBCC_Type *type);
 // Is this a complex or imaginary floating-point type.?
 bool dbcc_type_is_complex (DBCC_Type *type);
 
+bool dbcc_type_is_floating_point (DBCC_Type *type);
+
 // A qualified- or unqualified-pointer to any type.
 bool dbcc_type_is_pointer (DBCC_Type *type);
+
+// an integer type (int or enum), or non-complex floating-type.
+bool dbcc_type_is_real (DBCC_Type *type);
 
 // This will do sign-extension as needed.
 // Type must be INT or ENUM.
 uint64_t   dbcc_type_value_to_uint64 (DBCC_Type *type,
                                       const void *value);
+
+void dbcc_typed_value_add (DBCC_Type *type,
+                           void *out,
+                           const void *a,
+                           const void *b);
+void dbcc_typed_value_subtract (DBCC_Type *type,
+                           void *out,
+                           const void *a,
+                           const void *b);
+void dbcc_typed_value_multiply (DBCC_Type *type,
+                           void *out,
+                           const void *a,
+                           const void *b);
+bool dbcc_typed_value_divide (DBCC_Type *type,
+                           void *out,
+                           const void *a,
+                           const void *b);
+bool dbcc_typed_value_remainder (DBCC_Type *type,
+                           void *out,
+                           const void *a,
+                           const void *b);
+
+/* out is of type int, and will always be 0 or 1. */
+bool dbcc_typed_value_compare (DBCC_Namespace *ns, 
+                               DBCC_Type *type,
+                               DBCC_BinaryOperator op,
+                               void *out,
+                               const void *a,
+                               const void *b);
+
 #endif /* __DBCC_TYPE_H_ */

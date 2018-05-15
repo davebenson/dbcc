@@ -5,11 +5,15 @@ typedef union DBCC_Expr DBCC_Expr;
 
 typedef struct DBCC_Expr_Base DBCC_Expr_Base;
 typedef struct DBCC_BinaryOperatorExpr DBCC_BinaryOperatorExpr;
+typedef struct DBCC_InplaceUnaryOperatorExpr DBCC_InplaceUnaryOperatorExpr;
 typedef struct DBCC_UnaryOperatorExpr DBCC_UnaryOperatorExpr;
 typedef struct DBCC_TernaryOperatorExpr DBCC_TernaryOperatorExpr;
+typedef struct DBCC_InplaceBinaryOperatorExpr DBCC_InplaceBinaryOperatorExpr;
 typedef struct DBCC_SubscriptExpr DBCC_SubscriptExpr;
 typedef struct DBCC_VariableExpr DBCC_VariableExpr;
 typedef struct DBCC_ConstantExpr DBCC_ConstantExpr;
+typedef struct DBCC_CallExpr DBCC_CallExpr;
+typedef struct DBCC_CastExpr DBCC_CastExpr;
 typedef struct DBCC_StructuredInitializerPiece DBCC_StructuredInitializerPiece;
 typedef struct DBCC_StructuredInitializer DBCC_StructuredInitializer;
 typedef struct DBCC_StructuredInitializerExpr DBCC_StructuredInitializerExpr;
@@ -19,8 +23,12 @@ typedef enum
   DBCC_EXPR_TYPE_UNARY_OP,
   DBCC_EXPR_TYPE_BINARY_OP,
   DBCC_EXPR_TYPE_TERNARY_OP,
+  DBCC_EXPR_TYPE_INPLACE_BINARY_OP,
+  DBCC_EXPR_TYPE_INPLACE_UNARY_OP,
   DBCC_EXPR_TYPE_CONSTANT,
   DBCC_EXPR_TYPE_SUBSCRIPT,
+  DBCC_EXPR_TYPE_CALL,
+  DBCC_EXPR_TYPE_CAST,
 } DBCC_Expr_Type;
 
 struct DBCC_Expr_Base
@@ -53,6 +61,22 @@ struct DBCC_TernaryOperatorExpr
   DBCC_Expr *b;
 };
 
+// there are four:  ++x --x x++ x--
+struct DBCC_InplaceUnaryOperatorExpr
+{
+  DBCC_Expr_Base base;
+  DBCC_InplaceUnaryOperator op;
+  DBCC_Expr *inout;
+};
+
+// there are:  += -= /= *= %= &= |= ^= >>= <<=
+struct DBCC_InplaceBinaryOperatorExpr
+{
+  DBCC_Expr_Base base;
+  DBCC_InplaceBinaryOperator op;
+  DBCC_Expr *inout, *b;
+};
+
 struct DBCC_SubscriptExpr
 {
   DBCC_Expr_Base base;
@@ -66,14 +90,36 @@ struct DBCC_VariableExpr
   DBCC_Symbol name;
 };
 
+struct DBCC_CallExpr
+{
+  DBCC_Expr_Base base;
+  DBCC_Type *function_type;          // FUNCTION or FUNCTION_KR
+  DBCC_Expr *head;
+  size_t n_args;
+  DBCC_Expr **args;
+};
+
+struct DBCC_CastExpr
+{
+  DBCC_Expr_Base base;
+  DBCC_Expr *pre_cast_expr;
+};
+
 union DBCC_Expr
 {
   DBCC_Expr_Type expr_type;
   DBCC_Expr_Base base;
+
   DBCC_UnaryOperatorExpr v_unary;
   DBCC_BinaryOperatorExpr v_binary;
   DBCC_TernaryOperatorExpr v_ternary;
+
+  DBCC_InplaceUnaryOperatorExpr v_inplace_unary;
+  DBCC_InplaceBinaryOperatorExpr v_inplace_binary;
+
   DBCC_SubscriptExpr v_subscript;
+  DBCC_CallExpr v_call;
+  DBCC_CastExpr v_cast;
 };
 
 typedef struct DBCC_GenericAssociation DBCC_GenericAssociation;
@@ -83,31 +129,45 @@ struct DBCC_GenericAssociation
   DBCC_Expr *expr;
 };
 
-DBCC_Expr *dbcc_expr_new_alignof_type     (DBCC_TargetEnvironment *env,
+DBCC_Expr *dbcc_expr_new_alignof_type     (DBCC_Namespace     *ns,
                                            DBCC_Type          *type,
                                            DBCC_Error        **error);
-DBCC_Expr *dbcc_expr_new_alignof_expr     (DBCC_TargetEnvironment *env,
+DBCC_Expr *dbcc_expr_new_alignof_expr     (DBCC_Namespace     *ns,
                                            DBCC_Expr          *expr,
                                            DBCC_Error        **error);
-DBCC_Expr *dbcc_expr_new_binary_operator  (DBCC_BinaryOperator op,
+DBCC_Expr *dbcc_expr_new_binary_operator  (DBCC_Namespace     *ns,
+                                           DBCC_BinaryOperator op,
                                            DBCC_Expr          *a,
-                                           DBCC_Expr          *b);
-DBCC_Expr *dbcc_expr_new_inplace_binary   (DBCC_InplaceBinaryOperator op,
+                                           DBCC_Expr          *b,
+                                           DBCC_Error        **error);
+DBCC_Expr *dbcc_expr_new_inplace_binary   (DBCC_Namespace     *ns,
+                                           DBCC_InplaceBinaryOperator op,
                                            DBCC_Expr          *in_out,
-                                           DBCC_Expr          *b);
-DBCC_Expr *dbcc_expr_new_call             (DBCC_Expr          *head,
+                                           DBCC_Expr          *b,
+                                           DBCC_Error        **error);
+DBCC_Expr *dbcc_expr_new_call             (DBCC_Namespace     *ns,
+                                           DBCC_Expr          *head,
                                            unsigned            n_args,
-                                           DBCC_Expr         **args);
-DBCC_Expr *dbcc_expr_new_cast             (DBCC_Type          *type,
-                                           DBCC_Expr          *value);
-DBCC_Expr *dbcc_expr_new_generic_selection(DBCC_Expr          *expr,
+                                           DBCC_Expr         **args,
+                                           DBCC_Error        **error);
+DBCC_Expr *dbcc_expr_new_cast             (DBCC_Namespace     *ns,
+                                           DBCC_Type          *type,
+                                           DBCC_Expr          *value,
+                                           DBCC_Error        **error);
+DBCC_Expr *dbcc_expr_new_generic_selection(DBCC_Namespace     *ns,
+                                           DBCC_Expr          *expr,
                                            size_t              n_associations,
                                            DBCC_GenericAssociation *associations,
-                                           DBCC_Expr          *default_expr);
-DBCC_Expr *dbcc_expr_new_inplace_unary    (DBCC_InplaceUnaryOperator  op,
-                                           DBCC_Expr          *in_out);
-DBCC_Expr *dbcc_expr_new_member_access    (DBCC_Expr          *expr,
-                                           DBCC_Symbol        *name);
+                                           DBCC_Expr          *default_expr,
+                                           DBCC_Error        **error);
+DBCC_Expr *dbcc_expr_new_inplace_unary    (DBCC_Namespace     *ns,
+                                           DBCC_InplaceUnaryOperator op,
+                                           DBCC_Expr          *in_out,
+                                           DBCC_Error        **error);
+DBCC_Expr *dbcc_expr_new_member_access    (DBCC_Namespace     *ns,
+                                           DBCC_Expr          *expr,
+                                           DBCC_Symbol        *name,
+                                           DBCC_Error        **error);
 DBCC_Expr *dbcc_expr_new_pointer_access   (DBCC_Expr          *expr,
                                            DBCC_Symbol        *name);
 DBCC_Expr *dbcc_expr_new_sizeof_expr      (DBCC_Expr          *expr);
@@ -170,6 +230,9 @@ DBCC_Expr *dbcc_expr_new_structured_initializer
 DBCC_Expr *dbcc_expr_new_ternary (DBCC_Expr *cond,
                                   DBCC_Expr *a,
                                   DBCC_Expr *b);
+
+bool dbcc_expr_is_lvalue (DBCC_Expr *expr);
+bool dbcc_expr_is_null_pointer_constant (DBCC_Expr *expr);
 
 void dbcc_expr_destroy (DBCC_Expr *expr);
 

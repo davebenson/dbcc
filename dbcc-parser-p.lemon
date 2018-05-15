@@ -1507,7 +1507,7 @@ declarator_modify_type (P_Context *context,
                 dbcc_error_add_code_position (context->error, size_expr->base.code_position);
                 return NULL;
               }
-            if (!dbcc_cast_value (dbcc_namespace_get_sizet_type(context->globals), &count,
+            if (!dbcc_cast_value (dbcc_namespace_get_size_type(context->globals), &count,
                                   size_expr->base.value_type,
                                   size_expr->base.constant_value))
               {
@@ -1535,7 +1535,7 @@ declarator_modify_type (P_Context *context,
             dbcc_error_add_code_position(context->error, bw->base.code_position);
             return NULL;
           }
-        if (!dbcc_cast_value (dbcc_namespace_get_sizet_type(context->globals), &width,
+        if (!dbcc_cast_value (dbcc_namespace_get_size_type(context->globals), &width,
                               bw->base.value_type, bw->base.constant_value))
           {
             context->error = dbcc_error_new (DBCC_ERROR_EXPECTED_INT,
@@ -1768,6 +1768,23 @@ error_set_code_location_from_expr (P_Context *context, DBCC_Expr *expr)
     dbcc_error_add_code_position (context->error, expr->base.code_position);
 }
 
+#define MK_BINARY(rv, SHORTNAME, a, b)                                        \
+  do{                                                                         \
+    rv = dbcc_expr_new_binary_operator(P_CONTEXT_NAMESPACE (context),         \
+                                       DBCC_BINARY_OPERATOR_##SHORTNAME,      \
+                                       a, b, &context->error);                \
+    if (rv == NULL)                                                           \
+      FAIL();                                                                 \
+  }while(0)
+
+#define MK_INPLACE_UNARY(rv, SHORTNAME, in)                                   \
+  do{                                                                         \
+    rv = dbcc_expr_new_inplace_unary(P_CONTEXT_NAMESPACE (context),           \
+                                     DBCC_INPLACE_UNARY_OPERATOR_##SHORTNAME, \
+                                     in, &context->error);                    \
+    if (rv == NULL)                                                           \
+      FAIL();                                                                 \
+  }while(0)
 } ////// end of "included" code
 
 %extra_argument {P_Context *context}
@@ -2036,7 +2053,11 @@ generic_selection(rv) ::= GENERIC LPAREN assignment_expression(key_expr) COMMA g
               free (a);
             }
           list.last = NULL;
-          rv = dbcc_expr_new_generic_selection (key_expr, count, assocs, def_expr);
+          rv = dbcc_expr_new_generic_selection (P_CONTEXT_NAMESPACE (context),
+                                                key_expr, count, assocs, def_expr,
+                                                &context->error);
+          if (rv == NULL)
+            FAIL();
         }
 
 generic_assoc_list(list) ::= generic_association(assoc).
@@ -2057,7 +2078,12 @@ postfix_expression(rv) ::= primary_expression(a).
 postfix_expression(rv) ::= postfix_expression(a) LBRACKET expression(expr) RBRACKET.
         { rv = dbcc_expr_new_subscript (a, expr); a = NULL; expr = NULL; }
 postfix_expression(rv) ::= postfix_expression(head) LPAREN RPAREN.
-        { rv = dbcc_expr_new_call (head, 0, NULL); }
+        { rv = dbcc_expr_new_call (P_CONTEXT_NAMESPACE (context),
+                                   head, 0, NULL,
+                                   &context->error);
+          if (rv == NULL)
+            FAIL();
+        }
 
 postfix_expression(rv) ::= postfix_expression(head) LPAREN argument_expression_list(list) RPAREN.
         { size_t count = 0;
@@ -2072,7 +2098,12 @@ postfix_expression(rv) ::= postfix_expression(head) LPAREN argument_expression_l
               list.first = kill->next;
               free(kill);
             }
-          rv = dbcc_expr_new_call (head, count, args); }
+          rv = dbcc_expr_new_call (P_CONTEXT_NAMESPACE (context),
+                                   head, count, args,
+                                   &context->error);
+          if (rv == NULL)
+            FAIL();
+        }
 
 postfix_expression(rv) ::= postfix_expression(head) PERIOD IDENTIFIER(id).
         { rv = dbcc_expr_new_member_access(head, id.v_identifier);
@@ -2081,9 +2112,9 @@ postfix_expression(rv) ::= postfix_expression(head) PERIOD IDENTIFIER(id).
 postfix_expression(rv) ::= postfix_expression(head) POINTER_ACCESS IDENTIFIER(id).
         { rv = dbcc_expr_new_pointer_access (head, id.v_identifier); }
 postfix_expression(rv) ::= postfix_expression(expr) INCREMENT.
-        { rv = dbcc_expr_new_inplace_unary(DBCC_INPLACE_UNARY_OPERATOR_POST_INCR, expr); }
+        { MK_INPLACE_UNARY(rv, POST_INCR, expr); }
 postfix_expression(rv) ::= postfix_expression(expr) DECREMENT.
-        { rv = dbcc_expr_new_inplace_unary(DBCC_INPLACE_UNARY_OPERATOR_POST_DECR, expr); }
+        { MK_INPLACE_UNARY(rv, POST_DECR, expr); }
 postfix_expression(rv) ::= LPAREN type_name(type) RPAREN LBRACE initializer_list(list) optional_comma RBRACE.
         { DBCC_StructuredInitializer sinit;
           structured_initializer_from_p_initializer_list (&list, &sinit);
@@ -2105,9 +2136,9 @@ unary_expression(out) ::= postfix_expression(in).
         { out = in; in = NULL; }
 
 unary_expression(rv) ::= INC_OP unary_expression(expr).
-        { rv = dbcc_expr_new_inplace_unary(DBCC_INPLACE_UNARY_OPERATOR_PRE_INCR, expr); expr = NULL; }
+        { MK_INPLACE_UNARY (rv, PRE_INCR, expr); }
 unary_expression(rv) ::= DEC_OP unary_expression(expr).
-        { rv = dbcc_expr_new_inplace_unary(DBCC_INPLACE_UNARY_OPERATOR_PRE_DECR, expr); expr = NULL; }
+        { MK_INPLACE_UNARY (rv, PRE_DECR, expr); }
 unary_expression(rv) ::= unary_operator(op) cast_expression(expr).
         { rv = dbcc_expr_new_unary(op, expr); expr = NULL; }
 unary_expression(rv) ::= SIZEOF unary_expression(expr).
@@ -2115,7 +2146,7 @@ unary_expression(rv) ::= SIZEOF unary_expression(expr).
 unary_expression(rv) ::= SIZEOF LPAREN type_name(type) RPAREN.
         { rv = dbcc_expr_new_sizeof_type(type); }
 unary_expression(rv) ::= ALIGNOF LPAREN type_name(type) RPAREN.
-        { rv = dbcc_expr_new_alignof_type(context->target_env, type, &context->error);
+        { rv = dbcc_expr_new_alignof_type(context->globals, type, &context->error);
           if (rv == NULL) FAIL();
         }
 
@@ -2135,92 +2166,98 @@ unary_operator(rv) ::= EXCLAMATION_POINT.
 cast_expression(rv) ::= unary_expression(expr).
         { rv = expr; expr = NULL; }
 cast_expression(rv) ::= LPAREN type_name(type) RPAREN cast_expression(expr).
-        { rv = dbcc_expr_new_cast (type, expr); type = NULL; expr = NULL; }
+        { rv = dbcc_expr_new_cast (P_CONTEXT_NAMESPACE (context), type, expr, &context->error);
+          if (rv == NULL)
+            FAIL();
+        }
 
 multiplicative_expression(rv) ::= cast_expression(expr).
         { rv = expr; expr = NULL; }
 multiplicative_expression(rv) ::= multiplicative_expression(a) ASTERISK cast_expression(b).
-        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_MUL, a, b);
-          a = b = NULL; }
+        { MK_BINARY (rv, MUL, a, b); }
 multiplicative_expression(rv) ::= multiplicative_expression(a) SLASH cast_expression(b).
-        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_DIV, a, b);
-          a = b = NULL; }
+        { MK_BINARY (rv, DIV, a, b); }
 multiplicative_expression(rv) ::= multiplicative_expression(a) PERCENT cast_expression(b).
-        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_REMAINDER, a, b);
-          a = b = NULL; }
+        { MK_BINARY (rv, REM, a, b); }
 
 additive_expression(rv) ::= multiplicative_expression(expr).
         { rv = expr; expr = NULL; }
 additive_expression(rv) ::= additive_expression(a) PLUS multiplicative_expression(b).
-        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_ADD, a, b);
-          a = b = NULL; }
+        { rv = dbcc_expr_new_binary_operator (context->globals, DBCC_BINARY_OPERATOR_ADD, a, b, &context->error);
+          if (rv == NULL)
+            FAIL(); }
 additive_expression(rv) ::= additive_expression(a) MINUS multiplicative_expression(b).
-        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_SUB, a, b);
-          a = b = NULL; }
+        { rv = dbcc_expr_new_binary_operator (context->globals, DBCC_BINARY_OPERATOR_SUB, a, b, &context->error);
+          if (rv == NULL)
+            FAIL(); }
 
 shift_expression(rv) ::= additive_expression(expr).
         { rv = expr; expr = NULL; }
 shift_expression(rv) ::= shift_expression(a) SHIFT_LEFT additive_expression(b).
-        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_SHIFT_LEFT, a, b);
-          a = b = NULL; }
+        { rv = dbcc_expr_new_binary_operator (context->globals, DBCC_BINARY_OPERATOR_SHIFT_LEFT, a, b, &context->error);
+          if (rv == NULL)
+            FAIL(); }
 shift_expression(rv) ::= shift_expression(a) SHIFT_RIGHT additive_expression(b).
-        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_SHIFT_RIGHT, a, b);
-          a = b = NULL; }
+        { rv = dbcc_expr_new_binary_operator (context->globals, DBCC_BINARY_OPERATOR_SHIFT_RIGHT, a, b, &context->error);
+          if (rv == NULL)
+            FAIL(); }
 
 relational_expression(rv) ::= shift_expression(expr).
         { rv = expr; expr = NULL; }
 relational_expression(rv) ::= relational_expression(a) LESS_THAN shift_expression(b).
-        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_LT, a, b);
-          a = b = NULL; }
+        { rv = dbcc_expr_new_binary_operator (context->globals, DBCC_BINARY_OPERATOR_LT, a, b, &context->error);
+          if (rv == NULL)
+            FAIL(); }
 relational_expression(rv) ::= relational_expression(a) GREATER_THAN shift_expression(b).
-        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_GT, a, b);
-          a = b = NULL; }
+        { rv = dbcc_expr_new_binary_operator (context->globals, DBCC_BINARY_OPERATOR_GT, a, b, &context->error);
+          if (rv == NULL)
+            FAIL(); }
 relational_expression(rv) ::= relational_expression(a) LE shift_expression(b).
-        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_LTEQ, a, b);
+        { rv = dbcc_expr_new_binary_operator (context->globals, DBCC_BINARY_OPERATOR_LTEQ, a, b, &context->error);
           a = b = NULL; }
 relational_expression(rv) ::= relational_expression(a) GE shift_expression(b).
-        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_GTEQ, a, b);
+        { rv = dbcc_expr_new_binary_operator (context->globals, DBCC_BINARY_OPERATOR_GTEQ, a, b, &context->error);
           a = b = NULL; }
 
 equality_expression(rv) ::= relational_expression(expr).
         { rv = expr; expr = NULL; }
 // example: a == b
 equality_expression(rv) ::= equality_expression(a) IS_EQUAL_TO relational_expression(b).
-        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_EQ, a, b);
+        { rv = dbcc_expr_new_binary_operator (context->globals, DBCC_BINARY_OPERATOR_EQ, a, b, &context->error);
           a = b = NULL; }
 // example: a != b
 equality_expression(rv) ::= equality_expression(a) NOT_EQUAL_TO relational_expression(b).
-        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_NE, a, b);
+        { rv = dbcc_expr_new_binary_operator (context->globals, DBCC_BINARY_OPERATOR_NE, a, b, &context->error);
           a = b = NULL; }
 
 and_expression(rv) ::= equality_expression(expr).
         { rv = expr; expr = NULL; }
 and_expression(rv) ::= and_expression(a) AMPERSAND equality_expression(b).
-        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_BITWISE_AND, a, b);
+        { rv = dbcc_expr_new_binary_operator (context->globals, DBCC_BINARY_OPERATOR_BITWISE_AND, a, b, &context->error);
           a = b = NULL; }
 
 exclusive_or_expression(rv) ::= and_expression(expr).
         { rv = expr; expr = NULL; }
 exclusive_or_expression(rv) ::= exclusive_or_expression(a) CARAT and_expression(b).
-        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_BITWISE_XOR, a, b);
+        { rv = dbcc_expr_new_binary_operator (context->globals, DBCC_BINARY_OPERATOR_BITWISE_XOR, a, b, &context->error);
           a = b = NULL; }
 
 inclusive_or_expression(rv) ::= exclusive_or_expression(expr).
         { rv = expr; expr = NULL; }
 inclusive_or_expression(rv) ::= inclusive_or_expression(a) VERTICAL_BAR exclusive_or_expression(b).
-        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_BITWISE_OR, a, b);
+        { rv = dbcc_expr_new_binary_operator (context->globals, DBCC_BINARY_OPERATOR_BITWISE_OR, a, b, &context->error);
           a = b = NULL; }
 
 logical_and_expression(rv) ::= inclusive_or_expression(expr).
         { rv = expr; expr = NULL; }
 logical_and_expression(rv) ::= logical_and_expression(a) LOGICAL_AND inclusive_or_expression(b).
-        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_LOGICAL_AND, a, b);
+        { rv = dbcc_expr_new_binary_operator (context->globals, DBCC_BINARY_OPERATOR_LOGICAL_AND, a, b, &context->error);
           a = b = NULL; }
 
 logical_or_expression(rv) ::= logical_and_expression(expr).
         { rv = expr; expr = NULL; }
 logical_or_expression(rv) ::= logical_or_expression(a) LOGICAL_OR logical_and_expression(b).
-        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_LOGICAL_OR, a, b);
+        { rv = dbcc_expr_new_binary_operator (context->globals, DBCC_BINARY_OPERATOR_LOGICAL_OR, a, b, &context->error);
           a = b = NULL; }
 
 conditional_expression(rv) ::= logical_or_expression(expr).
@@ -2232,7 +2269,10 @@ conditional_expression(rv) ::= logical_or_expression(a) QUESTION_MARK expression
 assignment_expression(rv) ::= conditional_expression(expr).
         { rv = expr; expr = NULL; }
 assignment_expression(rv) ::= unary_expression(a) assignment_operator(op) assignment_expression(b).
-	{ rv = dbcc_expr_new_inplace_binary (op, a, b); }
+	{ rv = dbcc_expr_new_inplace_binary (context->globals, op, a, b, &context->error);
+          if (!rv)
+            FAIL();
+        }
 
 assignment_operator(rv) ::= EQUAL_SIGN.
         { rv = DBCC_INPLACE_BINARY_OPERATOR_ASSIGN; }
@@ -2260,8 +2300,7 @@ assignment_operator(rv) ::= BITWISE_OR_ASSIGN.
 expression(rv) ::= assignment_expression(expr).
         { rv = expr; expr = NULL; }
 expression(rv) ::= expression(a) COMMA assignment_expression(b).
-        { rv = dbcc_expr_new_binary_operator (DBCC_BINARY_OPERATOR_COMMA, a, b);
-          a = b = NULL; }
+        { MK_BINARY(rv, COMMA, a, b); }
 
 constant_expression(rv) ::= conditional_expression(a).
 	{ rv = a;
