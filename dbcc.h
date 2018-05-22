@@ -6,8 +6,11 @@ typedef struct DBCC_Param DBCC_Param;
 typedef union DBCC_Type DBCC_Type;
 typedef union DBCC_Statement DBCC_Statement;
 typedef union DBCC_Expr DBCC_Expr;
+typedef union DBCC_Address DBCC_Address;
 typedef struct DBCC_String DBCC_String;
 typedef struct DBCC_TargetEnvironment DBCC_TargetEnvironment;
+typedef struct DBCC_Global DBCC_Global;
+typedef struct DBCC_Local DBCC_Local;
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -59,6 +62,7 @@ typedef enum
   DBCC_BINARY_OPERATOR_BITWISE_XOR,
   DBCC_BINARY_OPERATOR_COMMA
 } DBCC_BinaryOperator;
+const char *dbcc_binary_operator_name (DBCC_BinaryOperator op);
 
 #define DBCC_N_BINARY_OPERATORS (DBCC_BINARY_OPERATOR_COMMA+1)
 

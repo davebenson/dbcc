@@ -198,3 +198,6 @@ DBCC_Statement *dbcc_statement_new_return         (DBCC_Expr          *opt_expr,
                                                    DBCC_Error        **error);
 
 void dbcc_statement_destroy (DBCC_Statement *statement);
+
+bool dbcc_statement_do_type_inference             (DBCC_Statement   *statement,
+                                                   DBCC_Error        **error);

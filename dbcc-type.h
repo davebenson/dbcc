@@ -238,6 +238,7 @@ bool       dbcc_type_complete_struct(DBCC_TargetEnvironment *env,
                                      size_t                  n_members,
                                      DBCC_Param             *members,
                                      DBCC_Error            **error);
+DBCC_TypeStructMember *dbcc_type_struct_lookup_member (DBCC_Type *type, DBCC_Symbol *name);
 
 DBCC_Type *dbcc_type_new_union    (DBCC_TargetEnvironment *env,
                                    DBCC_Symbol        *tag,
@@ -250,6 +251,7 @@ bool       dbcc_type_complete_union(DBCC_TargetEnvironment *env,
                                    size_t              n_members,
                                    DBCC_Param         *members,
                                    DBCC_Error        **error);
+DBCC_TypeUnionBranch *dbcc_type_union_lookup_branch (DBCC_Type *type, DBCC_Symbol *name);
 
 bool  dbcc_cast_value (DBCC_Type  *dst_type,
                        void       *dst_value,
@@ -277,6 +279,8 @@ bool   dbcc_type_is_scalar (DBCC_Type *type);
 // Is enum or int?   This is the condition required by switch-statements.
 bool   dbcc_type_is_integer (DBCC_Type *type);
 
+bool   dbcc_type_is_const   (DBCC_Type *type);
+
 // Can (most) arithmetic operators be applied to this type?
 // Alternately: does it represent a number?
 // (Enums are considered arithmetic, as well as int and float types.)
@@ -297,6 +301,12 @@ bool dbcc_type_is_real (DBCC_Type *type);
 // Type must be INT or ENUM.
 uint64_t   dbcc_type_value_to_uint64 (DBCC_Type *type,
                                       const void *value);
+void       dbcc_typed_value_set_int64(DBCC_Type  *type,
+                                      const void *out,
+                                      int64_t     v);
+void       dbcc_typed_value_set_long_double (DBCC_Type *type,
+                                      const void *out,
+                                      long double v);
 
 void dbcc_typed_value_add (DBCC_Type *type,
                            void *out,
@@ -318,7 +328,35 @@ bool dbcc_typed_value_remainder (DBCC_Type *type,
                            void *out,
                            const void *a,
                            const void *b);
+// type must be integer (or enum- only size/signedness is used) for shifting
+bool dbcc_typed_value_shift_left (DBCC_Type *type,
+                           void *out,
+                           const void *a,
+                           const void *b);
+bool dbcc_typed_value_shift_right (DBCC_Type *type,
+                           void *out,
+                           const void *a,
+                           const void *b);
 
+bool dbcc_typed_value_bitwise_and (DBCC_Type *type,
+                                   void *out,
+                                   const void *a,
+                                   const void *b);
+bool dbcc_typed_value_bitwise_or  (DBCC_Type *type,
+                                   void *out,
+                                   const void *a,
+                                   const void *b);
+bool dbcc_typed_value_bitwise_xor (DBCC_Type *type,
+                                   void *out,
+                                   const void *a,
+                                   const void *b);
+
+bool dbcc_typed_value_negate (DBCC_Type *type,
+                              void *out,
+                              const void *a);
+void dbcc_typed_value_bitwise_not (DBCC_Type *type,
+                                   void *out,
+                                   const void *in);
 /* out is of type int, and will always be 0 or 1. */
 bool dbcc_typed_value_compare (DBCC_Namespace *ns, 
                                DBCC_Type *type,
@@ -327,4 +365,6 @@ bool dbcc_typed_value_compare (DBCC_Namespace *ns,
                                const void *a,
                                const void *b);
 
+bool dbcc_typed_value_scalar_to_bool (DBCC_Type *type,
+                                      const void *value);
 #endif /* __DBCC_TYPE_H_ */

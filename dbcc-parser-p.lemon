@@ -154,6 +154,8 @@ struct P_Context
 #define P_CONTEXT_NAMESPACE(context) \
         ((context)->locals ? (context)->locals : (context)->globals)
 
+#define CONTEXT_NS     P_CONTEXT_NAMESPACE(context)
+
 typedef struct 
 {
   unsigned n_ptr;
@@ -166,7 +168,7 @@ p_context_lookup (P_Context *context,
                   DBCC_CodePosition *cp,
                   DBCC_NamespaceEntry *entry)
 {
-  if (!dbcc_namespace_lookup (P_CONTEXT_NAMESPACE(context), symbol, entry))
+  if (!dbcc_namespace_lookup (CONTEXT_NS, symbol, entry))
     {
       context->error = dbcc_error_new (DBCC_ERROR_NOT_FOUND,
                                        "symbol '%s' not found",
@@ -183,7 +185,7 @@ context_new_struct_stub (P_Context         *context,
                          DBCC_Symbol       *tag,
                          DBCC_CodePosition *cp)
 {
-  DBCC_Namespace *ns = P_CONTEXT_NAMESPACE(context);
+  DBCC_Namespace *ns = CONTEXT_NS;
   (void) cp;
   DBCC_Type *rv = dbcc_namespace_lookup_struct_tag (ns, tag);
   if (rv != NULL)
@@ -197,7 +199,7 @@ context_new_union_stub  (P_Context         *context,
                          DBCC_Symbol       *tag,
                          DBCC_CodePosition *cp)
 {
-  DBCC_Namespace *ns = P_CONTEXT_NAMESPACE(context);
+  DBCC_Namespace *ns = CONTEXT_NS;
   DBCC_Type *rv = dbcc_namespace_lookup_union_tag (ns, tag);
   (void) cp;
   if (rv != NULL)
@@ -215,7 +217,7 @@ context_new_struct               (P_Context         *context,
                                   DBCC_Param        *params)
 {
   DBCC_Type *rv;
-  DBCC_Namespace *ns = P_CONTEXT_NAMESPACE(context);
+  DBCC_Namespace *ns = CONTEXT_NS;
   rv = dbcc_namespace_lookup_struct_tag (ns, tag);
   if (rv != NULL)
     {
@@ -257,7 +259,7 @@ context_new_union               (P_Context         *context,
 
 {
   DBCC_Type *rv;
-  DBCC_Namespace *ns = P_CONTEXT_NAMESPACE(context);
+  DBCC_Namespace *ns = CONTEXT_NS;
   rv = dbcc_namespace_lookup_union_tag (ns, tag);
   if (rv != NULL)
     {
@@ -1770,7 +1772,7 @@ error_set_code_location_from_expr (P_Context *context, DBCC_Expr *expr)
 
 #define MK_BINARY(rv, SHORTNAME, a, b)                                        \
   do{                                                                         \
-    rv = dbcc_expr_new_binary_operator(P_CONTEXT_NAMESPACE (context),         \
+    rv = dbcc_expr_new_binary_operator(CONTEXT_NS,                            \
                                        DBCC_BINARY_OPERATOR_##SHORTNAME,      \
                                        a, b, &context->error);                \
     if (rv == NULL)                                                           \
@@ -1779,7 +1781,7 @@ error_set_code_location_from_expr (P_Context *context, DBCC_Expr *expr)
 
 #define MK_INPLACE_UNARY(rv, SHORTNAME, in)                                   \
   do{                                                                         \
-    rv = dbcc_expr_new_inplace_unary(P_CONTEXT_NAMESPACE (context),           \
+    rv = dbcc_expr_new_inplace_unary(CONTEXT_NS,                              \
                                      DBCC_INPLACE_UNARY_OPERATOR_##SHORTNAME, \
                                      in, &context->error);                    \
     if (rv == NULL)                                                           \
@@ -1987,26 +1989,30 @@ primary_expression(rv) ::= IDENTIFIER(id).
           // should already have been handled at lexing time.
           assert(ns_entry.entry_type == DBCC_NAMESPACE_ENTRY_GLOBAL);
 
-          rv = dbcc_expr_new_symbol (id.v_identifier);
+          rv = dbcc_expr_new_symbol (NULL, id.v_identifier, &context->error);
+
+
         }
 primary_expression(rv) ::= I_CONSTANT(c).
-        { rv = dbcc_expr_new_int_constant (c.v_i_constant.is_signed,
-                                           c.v_i_constant.sizeof_value,
-                                           c.v_i_constant.v_uint64);
+        { DBCC_Type *t = dbcc_namespace_get_integer_type (context->globals,
+                                                          c.v_i_constant.is_signed,
+                                                          c.v_i_constant.sizeof_value);
+          rv = dbcc_expr_new_int_constant (t, c.v_i_constant.v_uint64);
           dbcc_expr_add_code_position (rv, c.code_position); }
 primary_expression(rv) ::= F_CONSTANT(c).
-        { rv = dbcc_expr_new_float_constant (c.v_f_constant.sizeof_value,
+        { rv = dbcc_expr_new_float_constant (context->globals, 
+                                             c.v_f_constant.float_type,
                                              c.v_f_constant.v_long_double);
           dbcc_expr_add_code_position (rv, c.code_position); }
 primary_expression(rv) ::= ENUMERATION_CONSTANT(c).
         { rv = dbcc_expr_new_enum_constant (c.v_enum_value); }
 primary_expression(rv) ::= CHAR_CONSTANT(c).
-        { rv = dbcc_expr_new_int_constant (c.v_i_constant.is_signed,
-                                           c.v_i_constant.sizeof_value,
-                                           c.v_i_constant.v_uint64);
+        { 
+          DBCC_Type *t = dbcc_namespace_get_constant_char_type (c.v_char_constant.prefix);
+          rv = dbcc_expr_new_char_constant (t, c.v_char_constant.code);
           dbcc_expr_add_code_position (rv, c.code_position); }
 primary_expression(rv) ::= string(s).
-        { rv = dbcc_expr_new_string_constant (&s);
+        { rv = dbcc_expr_new_string_constant (context->globals, &s);
           s.str = NULL; }
 primary_expression(rv) ::= LPAREN expression(e) RPAREN.
         { rv = e; e = NULL; }
@@ -2053,7 +2059,7 @@ generic_selection(rv) ::= GENERIC LPAREN assignment_expression(key_expr) COMMA g
               free (a);
             }
           list.last = NULL;
-          rv = dbcc_expr_new_generic_selection (P_CONTEXT_NAMESPACE (context),
+          rv = dbcc_expr_new_generic_selection (CONTEXT_NS,
                                                 key_expr, count, assocs, def_expr,
                                                 &context->error);
           if (rv == NULL)
@@ -2076,9 +2082,10 @@ generic_association(assoc) ::= DEFAULT COLON assignment_expression(expr).
 postfix_expression(rv) ::= primary_expression(a).
         { rv = a; a = NULL; }
 postfix_expression(rv) ::= postfix_expression(a) LBRACKET expression(expr) RBRACKET.
-        { rv = dbcc_expr_new_subscript (a, expr); a = NULL; expr = NULL; }
+        { rv = dbcc_expr_new_subscript (CONTEXT_NS, a, expr, &context->error);
+        }
 postfix_expression(rv) ::= postfix_expression(head) LPAREN RPAREN.
-        { rv = dbcc_expr_new_call (P_CONTEXT_NAMESPACE (context),
+        { rv = dbcc_expr_new_call (CONTEXT_NS,
                                    head, 0, NULL,
                                    &context->error);
           if (rv == NULL)
@@ -2098,7 +2105,7 @@ postfix_expression(rv) ::= postfix_expression(head) LPAREN argument_expression_l
               list.first = kill->next;
               free(kill);
             }
-          rv = dbcc_expr_new_call (P_CONTEXT_NAMESPACE (context),
+          rv = dbcc_expr_new_call (CONTEXT_NS,
                                    head, count, args,
                                    &context->error);
           if (rv == NULL)
@@ -2106,11 +2113,22 @@ postfix_expression(rv) ::= postfix_expression(head) LPAREN argument_expression_l
         }
 
 postfix_expression(rv) ::= postfix_expression(head) PERIOD IDENTIFIER(id).
-        { rv = dbcc_expr_new_member_access(head, id.v_identifier);
+        { rv = dbcc_expr_new_access(CONTEXT_NS,
+                                    false,              // head is not a expected to a pointer
+                                    head, id.v_identifier,
+                                    &context->error);
+          if (rv == NULL)
+            FAIL();
         }
 
 postfix_expression(rv) ::= postfix_expression(head) POINTER_ACCESS IDENTIFIER(id).
-        { rv = dbcc_expr_new_pointer_access (head, id.v_identifier); }
+        { rv = dbcc_expr_new_access(CONTEXT_NS,
+                                    true,               // head is expected to a pointer
+                                    head, id.v_identifier,
+                                    &context->error);
+          if (rv == NULL)
+            FAIL();
+        }
 postfix_expression(rv) ::= postfix_expression(expr) INCREMENT.
         { MK_INPLACE_UNARY(rv, POST_INCR, expr); }
 postfix_expression(rv) ::= postfix_expression(expr) DECREMENT.
@@ -2140,11 +2158,22 @@ unary_expression(rv) ::= INC_OP unary_expression(expr).
 unary_expression(rv) ::= DEC_OP unary_expression(expr).
         { MK_INPLACE_UNARY (rv, PRE_DECR, expr); }
 unary_expression(rv) ::= unary_operator(op) cast_expression(expr).
-        { rv = dbcc_expr_new_unary(op, expr); expr = NULL; }
+        { rv = dbcc_expr_new_unary(CONTEXT_NS, op, expr, &context->error);
+          if (rv == NULL)
+            FAIL();
+        }
 unary_expression(rv) ::= SIZEOF unary_expression(expr).
-        { rv = dbcc_expr_new_sizeof_expr(expr); expr = NULL; }
-unary_expression(rv) ::= SIZEOF LPAREN type_name(type) RPAREN.
-        { rv = dbcc_expr_new_sizeof_type(type); }
+        { rv = dbcc_expr_new_sizeof_expr(CONTEXT_NS, expr, &context->error); 
+          if (rv == NULL)
+            FAIL();
+        }
+unary_expression(rv) ::= SIZEOF(sizeof_token) LPAREN type_name(type) RPAREN.
+        { rv = dbcc_expr_new_sizeof_type(CONTEXT_NS,
+                                         sizeof_token.code_position,
+                                         type,
+                                         &context->error);
+          if (rv == NULL) FAIL();
+        }
 unary_expression(rv) ::= ALIGNOF LPAREN type_name(type) RPAREN.
         { rv = dbcc_expr_new_alignof_type(context->globals, type, &context->error);
           if (rv == NULL) FAIL();
@@ -2166,7 +2195,7 @@ unary_operator(rv) ::= EXCLAMATION_POINT.
 cast_expression(rv) ::= unary_expression(expr).
         { rv = expr; expr = NULL; }
 cast_expression(rv) ::= LPAREN type_name(type) RPAREN cast_expression(expr).
-        { rv = dbcc_expr_new_cast (P_CONTEXT_NAMESPACE (context), type, expr, &context->error);
+        { rv = dbcc_expr_new_cast (CONTEXT_NS, type, expr, &context->error);
           if (rv == NULL)
             FAIL();
         }

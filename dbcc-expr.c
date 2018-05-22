@@ -1,5 +1,7 @@
 #include "dbcc.h"
 
+#define is_zero   dbcc_is_zero
+
 static inline DBCC_Expr *
 expr_alloc (DBCC_Expr_Type t)
 {
@@ -33,7 +35,8 @@ dbcc_expr_new_alignof_type     (DBCC_Namespace         *ns,
                                 "alignof must not be invoked on an incomplete type");
        return NULL;
      }
-  expr = dbcc_expr_new_int_constant (false, ns->target_env->sizeof_pointer, type->base.alignof_instance);
+  expr = dbcc_expr_new_int_constant (dbcc_namespace_get_size_type (ns),
+                                     type->base.alignof_instance);
   return expr;
 }
 
@@ -654,6 +657,206 @@ handle_equality_operator   (DBCC_Namespace *ns,
   return true;
 }
 
+/* 6.5.7 Bitwise shift operators
+ */
+static bool
+handle_shift_operator   (DBCC_Namespace *ns,
+                         DBCC_Expr *expr,
+                         DBCC_Error **error)
+{
+  /* 6.5.7p1 Each of the operands shall have integer type.  */
+  DBCC_Expr *a = expr->v_binary.a;
+  DBCC_Expr *b = expr->v_binary.b;
+  DBCC_Type *a_type = a->base.value_type;
+  DBCC_Type *b_type = b->base.value_type;
+  if (!dbcc_type_is_integer (a_type))
+    {
+      *error = dbcc_error_new (DBCC_ERROR_SHIFT_OF_NONINTEGER_VALUE,
+                               "operator %s requires first argument be integer, was %s",
+                               dbcc_binary_operator_name (expr->v_binary.op),
+                               dbcc_type_to_cstring (a_type));
+      dbcc_error_add_code_position (*error, a->base.code_position);
+      return false;
+    }
+  if (!dbcc_type_is_integer (b_type))
+    {
+      *error = dbcc_error_new (DBCC_ERROR_SHIFT_OF_NONINTEGER_VALUE,
+                               "operator %s requires second argument be integer, was %s",
+                               dbcc_binary_operator_name (expr->v_binary.op),
+                               dbcc_type_to_cstring (b_type));
+      dbcc_error_add_code_position (*error, b->base.code_position);
+      return false;
+    }
+  DBCC_Type *rv_type = usual_arithment_conversion_get_type (ns, a_type, b_type);
+  assert (rv_type != NULL);
+  expr->base.value_type = rv_type;
+
+  if (a->base.constant_value != NULL
+   && b->base.constant_value != NULL)
+    {
+      const void *ac_orig = a->base.constant_value;
+      const void *bc_orig = b->base.constant_value;
+      void *a_casted_to_rvtype = alloca (rv_type->base.sizeof_instance);
+      void *b_casted_to_rvtype = alloca (rv_type->base.sizeof_instance);
+      void *rv_value = alloca (rv_type->base.sizeof_instance);
+      dbcc_cast_value (rv_type, a_casted_to_rvtype, a->base.value_type, ac_orig);
+      dbcc_cast_value (rv_type, b_casted_to_rvtype, b->base.value_type, bc_orig);
+      switch (expr->v_binary.op)
+        {
+        case DBCC_BINARY_OPERATOR_SHIFT_LEFT:
+          dbcc_typed_value_shift_left (rv_type, rv_value,
+                                       a_casted_to_rvtype,
+                                       b_casted_to_rvtype);
+          break;
+        case DBCC_BINARY_OPERATOR_SHIFT_RIGHT:
+          dbcc_typed_value_shift_right(rv_type, rv_value,
+                                       a_casted_to_rvtype,
+                                       b_casted_to_rvtype);
+          break;
+        default:
+          assert(0);
+        }
+      expr->base.constant_value = rv_value;
+      return false;
+    }
+
+  return true;
+}
+
+/* 6.5.13. Logical AND operator
+ *
+ * p2: Each of the operands shall have scalar type.
+ *
+ *
+ * 6.5.14. Logical OR operator.
+ *
+ * p2: Each of the operands shall have scalar type.
+ */
+static bool
+handle_logical_op       (DBCC_Namespace *ns,
+                         DBCC_Expr *expr,
+                         DBCC_Error **error)
+{
+  DBCC_Expr *a = expr->v_binary.a;
+  DBCC_Expr *b = expr->v_binary.b;
+  if (!dbcc_type_is_scalar (a->base.value_type))
+    {
+      *error = dbcc_error_new (DBCC_ERROR_LOGICAL_OPERATOR_REQUIRES_SCALARS,
+                               "left-side of %s is not a scalar (is %s)",
+                               dbcc_binary_operator_name (expr->v_binary.op),
+                               dbcc_type_to_cstring (a->base.value_type));
+      dbcc_error_add_code_position (*error, a->base.code_position);
+      return false;
+    }
+  if (!dbcc_type_is_scalar (b->base.value_type))
+    {
+      *error = dbcc_error_new (DBCC_ERROR_LOGICAL_OPERATOR_REQUIRES_SCALARS,
+                               "right-side of %s is not a scalar (is %s)",
+                               dbcc_binary_operator_name (expr->v_binary.op),
+                               dbcc_type_to_cstring (b->base.value_type));
+      dbcc_error_add_code_position (*error, b->base.code_position);
+      return false;
+    }
+  expr->base.value_type = dbcc_namespace_get_int_type (ns);
+  if (a->base.constant_value && b->base.constant_value)
+    {
+      bool a_truth = !is_zero (a->base.value_type->base.sizeof_instance,
+                               a->base.constant_value);
+      bool b_truth = !is_zero (b->base.value_type->base.sizeof_instance,
+                               b->base.constant_value);
+      int value = expr->v_binary.op == DBCC_BINARY_OPERATOR_LOGICAL_AND
+                ? (a_truth && b_truth)
+                : (a_truth || b_truth);
+      expr->base.constant_value = malloc (ns->target_env->sizeof_int);
+      dbcc_typed_value_set_int64 (expr->base.value_type,
+                                  expr->base.constant_value,
+                                  value);
+    }
+  return true;
+}
+
+static bool
+handle_bitwise_op       (DBCC_Namespace *ns,
+                         DBCC_Expr *expr,
+                         DBCC_Error **error)
+{
+  /* 6.5.10 Bitwise AND operator
+   * 6.5.11 Bitwise exclusive OR operator
+   * 6.5.12 Bitwise inclusive OR operator
+   *
+   * p2: Each of the operands shall have integer type.
+   * p3: The usual arithmetic conversions are performed on the operands.
+   */
+  DBCC_Expr *aexpr = expr->v_binary.a;
+  DBCC_Expr *bexpr = expr->v_binary.b;
+  DBCC_Type *atype = dbcc_type_dequalify (aexpr->base.value_type);
+  DBCC_Type *btype = dbcc_type_dequalify (bexpr->base.value_type);
+  if (!dbcc_type_is_integer (atype)
+   || !dbcc_type_is_integer (btype))
+    {
+      *error = dbcc_error_new (DBCC_ERROR_NONINTEGER_BITWISE_OP,
+                               "%s must be applied to integer types",
+                               dbcc_binary_operator_name (expr->v_binary.op));
+      dbcc_error_add_code_position (*error, expr->base.code_position);
+      return false;
+    }
+
+  DBCC_Type *type = usual_arithment_conversion_get_type (ns, atype, btype);
+  expr->base.value_type = type;
+
+  /* constant folding */
+  if (aexpr->base.constant_value != NULL
+   && bexpr->base.constant_value != NULL)
+    {
+      void *acasted = alloca (type->base.sizeof_instance);
+      void *bcasted = alloca (type->base.sizeof_instance);
+      void *const_value = malloc (type->base.sizeof_instance);
+
+      // cast both values
+      if (!dbcc_cast_value (type, acasted,
+                            atype, aexpr->base.constant_value)
+       || !dbcc_cast_value (type, bcasted,
+                            btype, bexpr->base.constant_value))
+        assert (0);
+
+      switch (expr->v_binary.op)
+        {
+        case DBCC_BINARY_OPERATOR_BITWISE_AND:
+          dbcc_typed_value_bitwise_and (type, const_value, acasted, bcasted);
+          break;
+          
+        case DBCC_BINARY_OPERATOR_BITWISE_OR:
+          dbcc_typed_value_bitwise_or (type, const_value, acasted, bcasted);
+          break;
+        case DBCC_BINARY_OPERATOR_BITWISE_XOR:
+          dbcc_typed_value_bitwise_xor (type, const_value, acasted, bcasted);
+          break;
+        default:
+          assert(0);
+        }
+
+      expr->base.constant_value = const_value;
+    }
+  return true;
+}
+
+/* 6.5.17 Comma operator
+ */
+static bool
+handle_comma_operator   (DBCC_Namespace *ns,
+                         DBCC_Expr *expr,
+                         DBCC_Error **error)
+{
+  (void) error;
+  (void) ns;
+
+  expr->base.value_type = expr->v_binary.b->base.value_type;
+
+  // TODO cannot constant fold unless we can prove no side-effects.
+
+  return true;
+}
+
 static ExprHandler binary_operator_handlers[DBCC_N_BINARY_OPERATORS] =
 {
   [DBCC_BINARY_OPERATOR_ADD] = handle_add,
@@ -667,14 +870,14 @@ static ExprHandler binary_operator_handlers[DBCC_N_BINARY_OPERATORS] =
   [DBCC_BINARY_OPERATOR_GTEQ] = handle_relational_operator,
   [DBCC_BINARY_OPERATOR_EQ] = handle_equality_operator,
   [DBCC_BINARY_OPERATOR_NE] = handle_equality_operator,
-  //.DBCC_BINARY_OPERATOR_SHIFT_LEFT = handle_
-  //.DBCC_BINARY_OPERATOR_SHIFT_RIGHT = handle_
-  //.DBCC_BINARY_OPERATOR_LOGICAL_AND = handle_
-  //.DBCC_BINARY_OPERATOR_LOGICAL_OR = handle_
-  //.DBCC_BINARY_OPERATOR_BITWISE_AND = handle_
-  //.DBCC_BINARY_OPERATOR_BITWISE_OR = handle_
-  //.DBCC_BINARY_OPERATOR_BITWISE_XOR = handle_
-  //.DBCC_BINARY_OPERATOR_COMMA = handle_
+  [DBCC_BINARY_OPERATOR_SHIFT_LEFT] = handle_shift_operator,
+  [DBCC_BINARY_OPERATOR_SHIFT_RIGHT] = handle_shift_operator,
+  [DBCC_BINARY_OPERATOR_LOGICAL_AND] = handle_logical_op,
+  [DBCC_BINARY_OPERATOR_LOGICAL_OR] = handle_logical_op,
+  [DBCC_BINARY_OPERATOR_BITWISE_AND] = handle_bitwise_op,
+  [DBCC_BINARY_OPERATOR_BITWISE_OR] = handle_bitwise_op,
+  [DBCC_BINARY_OPERATOR_BITWISE_XOR] = handle_bitwise_op,
+  [DBCC_BINARY_OPERATOR_COMMA] = handle_comma_operator,
 };
 
 DBCC_Expr *
@@ -688,6 +891,11 @@ dbcc_expr_new_binary_operator  (DBCC_Namespace     *ns,
   rv->v_binary.op = op;
   rv->v_binary.a = a;
   rv->v_binary.b = b;
+
+  if (a->base.value_type == NULL || b->base.value_type == NULL)
+    {
+      return rv;
+    }
   
   // Compute type and fold constant values.
   assert(op < DBCC_N_BINARY_OPERATORS);
@@ -784,25 +992,30 @@ check_simple_assignment (DBCC_Expr          *in_out,
   return true;
 }
 
-DBCC_Expr *
-dbcc_expr_new_inplace_binary   (DBCC_Namespace     *ns,
-                                DBCC_InplaceBinaryOperator op,
-                                DBCC_Expr          *in_out,
-                                DBCC_Expr          *b,
-                                DBCC_Error        **error)
+
+static bool
+do_inplace_binary_type_inference (DBCC_Namespace *ns,
+                                  DBCC_Expr *expr,
+                                  DBCC_Error **error)
 {
-  (void) ns;
-
-  if (!dbcc_expr_is_lvalue (in_out))
+  DBCC_Expr *inout = expr->v_inplace_binary.inout;
+  DBCC_Expr *b = expr->v_inplace_binary.b;
+  DBCC_Type *inout_type = inout->base.value_type;
+  if (inout_type == NULL)
     {
-      *error = dbcc_error_new (DBCC_ERROR_LVALUE_REQUIRED,
-                               "left-side of '%s' must be assignable (aka an lvalue)",
-                               dbcc_inplace_binary_operator_name (op));
-      return NULL;
+      if (!dbcc_expr_do_type_inference (ns, inout, error))
+        return false;
+      inout_type = inout->base.value_type;
+      assert (inout_type != NULL);
     }
-
-  DBCC_Type *inout_type = in_out->base.value_type;
   DBCC_Type *b_type = b->base.value_type;
+  if (inout_type == NULL)
+    {
+      if (!dbcc_expr_do_type_inference (ns, b, error))
+        return false;
+      b_type = b->base.value_type;
+      assert(b_type != NULL);
+    }
 
   /* No assignment construct allows the LHS to be const, so
    * just check for that at the outset. */
@@ -814,9 +1027,10 @@ dbcc_expr_new_inplace_binary   (DBCC_Namespace     *ns,
       return NULL;
     }
 
+  DBCC_InplaceBinaryOperator op = expr->v_inplace_binary.op;
   if (op == DBCC_INPLACE_BINARY_OPERATOR_ASSIGN)
     {
-      if (!check_simple_assignment (in_out, b, error))
+      if (!check_simple_assignment (inout, b, error))
         return false;
     }
   else if (op == DBCC_INPLACE_BINARY_OPERATOR_ADD_ASSIGN
@@ -871,23 +1085,51 @@ dbcc_expr_new_inplace_binary   (DBCC_Namespace     *ns,
           break;
         }
     }
+  return true;
+}
+
+DBCC_Expr *
+dbcc_expr_new_inplace_binary   (DBCC_Namespace     *ns,
+                                DBCC_InplaceBinaryOperator op,
+                                DBCC_Expr          *inout,
+                                DBCC_Expr          *b,
+                                DBCC_Error        **error)
+{
+  (void) ns;
+
+  if (!dbcc_expr_is_lvalue (inout))
+    {
+      *error = dbcc_error_new (DBCC_ERROR_LVALUE_REQUIRED,
+                               "left-side of '%s' must be assignable (aka an lvalue)",
+                               dbcc_inplace_binary_operator_name (op));
+      return NULL;
+    }
+
   DBCC_Expr *rv = expr_alloc (DBCC_EXPR_TYPE_INPLACE_BINARY_OP);
-  rv->base.value_type = inout_type;
-  rv->v_inplace_binary.inout = in_out;
+  rv->v_inplace_binary.inout = inout;
   rv->v_inplace_binary.b = b;
   rv->v_inplace_binary.op = op;
+
+  if (inout->base.value_type != NULL && b->base.value_type != NULL)
+    {
+      if (!do_inplace_binary_type_inference (ns, rv, error))
+        {
+          dbcc_expr_destroy (rv);
+          return NULL;
+        }
+    }
+
   return rv;
 }
 
 /* See 6.5.2.2 Function calls
 */
-DBCC_Expr *
-dbcc_expr_new_call  (DBCC_Namespace     *ns,
-                     DBCC_Expr          *head,
-                     unsigned            n_args,
-                     DBCC_Expr         **args,
-                     DBCC_Error        **error)
+static bool
+do_call_type_inference (DBCC_Namespace *ns,
+                        DBCC_Expr      *call_expr,
+                        DBCC_Error    **error)
 {
+  DBCC_Expr *head = call_expr->v_call.head;
   DBCC_Type *head_type = head->base.value_type;
   DBCC_Type *tmp;
   DBCC_Type *fct = head_type->metatype == DBCC_TYPE_METATYPE_FUNCTION
@@ -906,10 +1148,11 @@ dbcc_expr_new_call  (DBCC_Namespace     *ns,
                  ? tmp
                  : NULL;
   (void) ns;
+  size_t n_args = call_expr->v_call.n_args;
 
   if (fct != NULL)
     {
-      /* arity match? */
+      /* Function must have the correct number of arguments.  */
       if (n_args < fct->v_function.n_params) 
         {
           *error = dbcc_error_new (DBCC_ERROR_TOO_FEW_ARGUMENTS,
@@ -917,7 +1160,7 @@ dbcc_expr_new_call  (DBCC_Namespace     *ns,
                                    (unsigned) n_args,
                                    (unsigned) fct->v_function.n_params);
           dbcc_error_add_code_position (*error, head->base.code_position);
-          return NULL;
+          return false;
         }
       else if (n_args > fct->v_function.n_params && !fct->v_function.has_varargs)
         {
@@ -926,7 +1169,7 @@ dbcc_expr_new_call  (DBCC_Namespace     *ns,
                                    (unsigned) n_args,
                                    (unsigned) fct->v_function.n_params);
           dbcc_error_add_code_position (*error, head->base.code_position);
-          return NULL;
+          return false;
         }
 
       /* Type check arguments. */
@@ -941,15 +1184,15 @@ dbcc_expr_new_call  (DBCC_Namespace     *ns,
           /* Section 6.3 "Conversions" gives the rules for what can
              be implicitly converted. */
           if (!dbcc_type_implicitly_convertable (fct->v_function.params[i].type,
-                                                args[i]->base.value_type))
+                                                call_expr->v_call.args[i]->base.value_type))
             {
               *error = dbcc_error_new (DBCC_ERROR_TYPE_MISMATCH,
                                        "cannot convert argument %u from %s to %s",
                                        (unsigned)(i+1),
-                                       dbcc_type_to_cstring (args[i]->base.value_type),
+                                       dbcc_type_to_cstring (call_expr->v_call.args[i]->base.value_type),
                                        dbcc_type_to_cstring (fct->v_function.params[i].type));
-              dbcc_error_add_code_position (*error, args[i]->base.code_position);
-              return NULL;
+              dbcc_error_add_code_position (*error, call_expr->v_call.args[i]->base.code_position);
+              return false;
             }
         }
 
@@ -965,7 +1208,7 @@ dbcc_expr_new_call  (DBCC_Namespace     *ns,
                                    (unsigned) n_args,
                                    (unsigned) fct->v_function_kr.n_params);
           dbcc_error_add_code_position (*error, head->base.code_position);
-          return NULL;
+          return false;
         }
       else if (n_args > fct->v_function_kr.n_params)
         {
@@ -974,7 +1217,7 @@ dbcc_expr_new_call  (DBCC_Namespace     *ns,
                                    (unsigned) n_args,
                                    (unsigned) fct->v_function_kr.n_params);
           dbcc_error_add_code_position (*error, head->base.code_position);
-          return NULL;
+          return false;
         }
       value_type = fct->v_function_kr.return_type;
       assert (value_type != NULL);
@@ -984,16 +1227,41 @@ dbcc_expr_new_call  (DBCC_Namespace     *ns,
       *error = dbcc_error_new (DBCC_ERROR_NOT_A_FUNCTION,
                                "called object not a function (%s)",
                                dbcc_type_to_cstring (head_type));
-      return NULL;
+      return false;
     }
-
+  return true;
+}
+DBCC_Expr *
+dbcc_expr_new_call  (DBCC_Namespace     *ns,
+                     DBCC_Expr          *head,
+                     unsigned            n_args,
+                     DBCC_Expr         **args,
+                     DBCC_Error        **error)
+{
   DBCC_Expr *call = expr_alloc (DBCC_EXPR_TYPE_CALL);
-  call->v_call.function_type = fct != NULL ? fct : kr_fct;
+  call->v_call.function_type = NULL;
   call->v_call.head = head;
   call->v_call.n_args = n_args;
   call->v_call.args = args;
-  call->base.value_type = value_type;
+  call->base.value_type = NULL;
   call->base.code_position = dbcc_code_position_ref (head->base.code_position);
+
+  if (head->base.value_type != NULL)
+    {
+      size_t i;
+      for (i = 0; i < n_args; i++)
+        if (args[i]->base.value_type == NULL)
+          break;
+      if (i == n_args)
+        {
+          //if head and all args are resolved, do type inference
+          if (!do_call_type_inference (ns, call, error))
+            {
+              dbcc_expr_destroy (call);
+              return NULL;
+            }
+        }
+    }
   return call;
 }
 
@@ -1023,6 +1291,9 @@ dbcc_expr_new_cast             (DBCC_Namespace     *ns,
   if (type->metatype == DBCC_TYPE_METATYPE_VOID)
     {
       // nothing to do
+    }
+  else if (value->base.value_type == NULL)
+    {
     }
   else if (dbcc_type_is_scalar (type)
    && dbcc_type_is_scalar (value->base.value_type))
@@ -1131,6 +1402,36 @@ dbcc_expr_new_generic_selection(DBCC_Namespace     *ns,
   return rv;
 }
 
+static bool
+do_inplace_unary_type_inference (DBCC_Namespace *ns,
+                                 DBCC_Expr      *expr,
+                                 DBCC_Error    **error)
+{
+  (void) ns;
+
+  // Call is_lvalue again, because type is required
+  // to determine constness.
+  DBCC_Expr *sub = expr->v_inplace_unary.inout;
+
+  if (dbcc_type_is_const (sub->base.value_type))
+    {
+      *error = dbcc_error_new (DBCC_ERROR_LVALUE_REQUIRED,
+                               "operator %s requires non-const lefthand-side",
+                               dbcc_inplace_unary_operator_name (expr->v_inplace_unary.op));
+      dbcc_error_add_code_position (*error, sub->base.code_position);
+      return false;
+    }
+  if (!dbcc_type_is_scalar (sub->base.value_type))
+    {
+      *error = dbcc_error_new (DBCC_ERROR_LVALUE_REQUIRED,
+                               "operator %s requires numeric expression",
+                               dbcc_inplace_unary_operator_name (expr->v_inplace_unary.op));
+      dbcc_error_add_code_position (*error, sub->base.code_position);
+      return false;
+    }
+  return true;
+}
+
 DBCC_Expr *
 dbcc_expr_new_inplace_unary    (DBCC_Namespace     *ns,
                                 DBCC_InplaceUnaryOperator op,
@@ -1148,15 +1449,6 @@ dbcc_expr_new_inplace_unary    (DBCC_Namespace     *ns,
       return NULL;
     }
 
-  if (!dbcc_type_is_scalar (in_out->base.value_type))
-    {
-      *error = dbcc_error_new (DBCC_ERROR_LVALUE_REQUIRED,
-                               "operator %s requires numeric expression",
-                               dbcc_inplace_unary_operator_name (op));
-      dbcc_error_add_code_position (*error, in_out->base.code_position);
-      return NULL;
-    }
-
   DBCC_Expr *rv = expr_alloc (DBCC_EXPR_TYPE_INPLACE_UNARY_OP);
   rv->base.value_type = dbcc_type_ref (in_out->base.value_type);
   rv->v_inplace_unary.op = op;
@@ -1165,37 +1457,88 @@ dbcc_expr_new_inplace_unary    (DBCC_Namespace     *ns,
 }
 
 DBCC_Expr *
-dbcc_expr_new_member_access    (DBCC_Namespace     *ns,
+dbcc_expr_new_access           (DBCC_Namespace     *ns,
+                                bool                is_pointer,
                                 DBCC_Expr          *expr,
                                 DBCC_Symbol        *name,
                                 DBCC_Error        **error)
 {
   DBCC_Type *deq_type = dbcc_type_dequalify (expr->base.value_type);
+  if (is_pointer)
+    {
+      if (!dbcc_type_is_pointer (deq_type))
+        {
+          *error = dbcc_error_new (DBCC_ERROR_EXPECTED_POINTER,
+                                   "operator -> must apply to a pointer, got %s",
+                                   dbcc_type_to_cstring (deq_type));
+          dbcc_error_add_code_position (*error, expr->base.code_position);
+          return NULL;
+        }
+      deq_type = dbcc_type_pointer_dereference (deq_type);
+      deq_type = dbcc_type_dequalify (deq_type);
+    }
+  DBCC_Type *member_type = NULL;
+  void *sub_info = NULL;
+  bool is_union = false;
+  (void) ns;
   switch (deq_type->metatype)
     {
     case DBCC_TYPE_METATYPE_STRUCT:
       if (deq_type->v_struct.incomplete)
         {
-          ... error
+          *error = dbcc_error_new (DBCC_ERROR_MEMBER_ACCESS_INCOMPLETE_TYPE,
+                                   "structure incomplete, so cannot access member");
+          dbcc_error_add_code_position (*error, expr->base.code_position);
+          return NULL;
         }
-      ...
+      DBCC_TypeStructMember *member = dbcc_type_struct_lookup_member (deq_type, name);
+      if (member == NULL)
+        {
+          *error = dbcc_error_new (DBCC_ERROR_UNKNOWN_MEMBER_ACCESS,
+                                   "unknown member %s",
+                                   dbcc_symbol_get_string (name));
+          dbcc_error_add_code_position (*error, expr->base.code_position);
+          return NULL;
+        }
+      member_type = member->type;
+      sub_info = member;
       break;
     case DBCC_TYPE_METATYPE_UNION:
       if (deq_type->v_union.incomplete)
         {
-          ... error
+          *error = dbcc_error_new (DBCC_ERROR_MEMBER_ACCESS_INCOMPLETE_TYPE,
+                                   "union incomplete, so cannot access branch");
+          dbcc_error_add_code_position (*error, expr->base.code_position);
+          return NULL;
         }
-      ...
+      DBCC_TypeUnionBranch *branch = dbcc_type_union_lookup_branch (deq_type, name);
+      if (branch == NULL)
+        {
+          *error = dbcc_error_new (DBCC_ERROR_UNKNOWN_MEMBER_ACCESS,
+                                   "unknown member %s",
+                                   dbcc_symbol_get_string (name));
+          dbcc_error_add_code_position (*error, expr->base.code_position);
+          return NULL;
+        }
+      member_type = branch->type;
+      sub_info = branch;
+      is_union = true;
       break;
     default:
-      ...
+      *error = dbcc_error_new (DBCC_ERROR_BAD_TYPE_FOR_MEMBER_ACCESS,
+                               "no members of type %s",
+                               dbcc_type_to_cstring (deq_type));
+      dbcc_error_add_code_position (*error, expr->base.code_position);
+      return NULL;
     }
 
-  DBCC_Expr *rv = expr_alloc (DBCC_EXPR_TYPE_MEMBER_ACCESS);
-  rv->base.value_type = ...;
-  rv->v_member_access.object = expr;
-  rv->v_member_access.name = name;
-  rv->v_member_access.sub_info = sub_info;
+  DBCC_Expr *rv = expr_alloc (DBCC_EXPR_TYPE_ACCESS);
+  rv->base.value_type = member_type;
+  rv->v_access.object = expr;
+  rv->v_access.name = name;
+  rv->v_access.sub_info = sub_info;
+  rv->v_access.is_union = is_union;
+  rv->v_access.is_pointer = is_pointer;
 
   // TODO: CONSTANT FOLDING???
   //rv->base.constant_value = 
@@ -1204,102 +1547,566 @@ dbcc_expr_new_member_access    (DBCC_Namespace     *ns,
 }
 
 DBCC_Expr *
-dbcc_expr_new_pointer_access   (DBCC_Expr          *expr,
-                                DBCC_Symbol        *name)
-{
-  if (!dbcc_type_is_pointer (expr->base.value_type))
-    {
-      ...
-    }
-  if (...) 
-    {
-      ...
-    }
-}
-
-DBCC_Expr *
-dbcc_expr_new_sizeof_expr      (DBCC_Expr          *expr)
+dbcc_expr_new_sizeof_expr      (DBCC_Namespace     *ns,
+                                DBCC_Expr          *expr,
+                                DBCC_Error        **error)
 {
   assert(expr->base.value_type != NULL);
-  return dbcc_expr_new_sizeof_type (expr->base.value_type);
+  return dbcc_expr_new_sizeof_type (ns,
+                                    expr->base.code_position,
+                                    expr->base.value_type,
+                                    error);
 }
 
 DBCC_Expr *
-dbcc_expr_new_sizeof_type      (DBCC_Type          *type)
+dbcc_expr_new_sizeof_type      (DBCC_Namespace     *ns,
+                                DBCC_CodePosition  *cp,
+                                DBCC_Type          *type,
+                                DBCC_Error        **error)
 {
-  assert(!dbcc_type_is_incomplete (type));
-  ... create CONSTANT expr
-  return ...
+  if (!dbcc_type_is_incomplete (type))
+    {
+      *error = dbcc_error_new (DBCC_ERROR_SIZEOF_INCOMPLETE_TYPE,
+                               "cannot take sizeof incomplete type");
+      dbcc_error_add_code_position (*error, cp);
+      return NULL;
+    }
+  size_t size = type->base.sizeof_instance;
+  DBCC_Expr *rv = dbcc_expr_new_int_constant (dbcc_namespace_get_size_type (ns),
+                                              size);
+  rv->base.code_position = dbcc_code_position_ref (cp);
+  return rv;
 }
 
 DBCC_Expr *
-dbcc_expr_new_subscript        (DBCC_Expr          *object,
-                                DBCC_Expr          *subscript)
+dbcc_expr_new_subscript        (DBCC_Namespace     *ns,
+                                DBCC_Expr          *object,
+                                DBCC_Expr          *subscript,
+                                DBCC_Error        **error)
 {
-...
+  DBCC_Expr *sum = dbcc_expr_new_binary_operator (ns, DBCC_BINARY_OPERATOR_ADD,
+                                                  object, subscript, error);
+  if (sum == NULL)
+    return NULL;
+  return dbcc_expr_new_unary (ns, DBCC_UNARY_OPERATOR_DEREFERENCE, sum, error);
 }
 
-DBCC_Expr *
-dbcc_expr_new_symbol           (DBCC_Namespace     *ns,
-                                DBCC_Symbol        *symbol)
+static bool
+do_symbol_type_inference (DBCC_Namespace     *ns,
+                          DBCC_Expr          *id,
+                          DBCC_Error        **error)
 {
-...
+  DBCC_NamespaceEntry entry;
+  if (!dbcc_namespace_lookup (ns, id->v_identifier.name, &entry))
+    {
+      *error = dbcc_error_new (DBCC_ERROR_IDENTIFIER_NOT_FOUND,
+                               "identifier %s not found",
+                               dbcc_symbol_get_string (id->v_identifier.name));
+      dbcc_error_add_code_position (*error, id->base.code_position);
+      return false;
+    }
+  switch (entry.entry_type)
+    {
+    case DBCC_NAMESPACE_ENTRY_TYPEDEF:
+      // I don't think this error is possible,
+      // because the lexer uses this lookup and converts typedefs into 
+      // a new token.
+      *error = dbcc_error_new (DBCC_ERROR_IDENTIFIER_IS_TYPEDEF,
+                               "identifier refers to a type, expected value");
+      return false;
+
+    case DBCC_NAMESPACE_ENTRY_ENUM_VALUE:
+      // store constant value
+      {
+      DBCC_Type *etype = entry.v_enum_value.enum_type;
+      id->base.value_type = etype;
+      id->v_identifier.id_type = DBCC_IDENTIFIER_TYPE_ENUM_VALUE;
+      id->v_identifier.v_enum_value.enum_type = etype;
+      id->v_identifier.v_enum_value.enum_value = entry.v_enum_value.enum_value;
+
+      // setup constant value
+      id->base.constant_value = malloc (etype->base.sizeof_instance);
+      dbcc_typed_value_set_int64 (etype, id->base.constant_value,
+                                  entry.v_enum_value.enum_value->value);
+      return true;
+      }
+
+    case DBCC_NAMESPACE_ENTRY_GLOBAL:
+      id->base.value_type = entry.v_global->type;
+      id->v_identifier.v_global = entry.v_global;
+
+      // XXX: constant folding?
+      return true;
+
+    case DBCC_NAMESPACE_ENTRY_LOCAL:
+      id->base.value_type = entry.v_local->type;
+      id->v_identifier.v_local = entry.v_local;
+      return true;
+    }
 }
 
 DBCC_Expr *
-dbcc_expr_new_int_constant     (bool                is_signed,
-                                size_t              sizeof_value,
+dbcc_expr_new_identifier       (DBCC_Namespace     *ns,
+                                DBCC_Symbol        *symbol,
+                                DBCC_Error        **error)
+{
+  DBCC_Expr *rv = expr_alloc (DBCC_EXPR_TYPE_IDENTIFIER);
+  (void) ns;
+  rv->v_identifier.name = symbol;
+  (void) error;
+  return rv;
+}
+
+DBCC_Expr *
+dbcc_expr_new_int_constant     (DBCC_Type          *type,
                                 uint64_t            value)
 {
-...
+  DBCC_Expr *rv = expr_alloc (DBCC_EXPR_TYPE_CONSTANT);
+  rv->base.value_type = type;
+  rv->base.constant_value = malloc (type->base.sizeof_instance);
+  dbcc_typed_value_set_int64 (type, rv->base.constant_value, value);
+  return rv;
 }
 
 DBCC_Expr *
-dbcc_expr_new_string_constant  (DBCC_String        *constant)
+dbcc_expr_new_string_constant  (DBCC_Namespace    *ns,
+                                const DBCC_String *constant)
 {
-...
+  DBCC_Expr *expr = expr_alloc (DBCC_EXPR_TYPE_CONSTANT_ADDRESS);
+  DBCC_Address *address;
+  address = dbcc_namespace_global_allocate_constant0
+                  (ns, constant->length, (const uint8_t *) constant->str);
+  expr->base.value_type = dbcc_type_new_array (ns->target_env,
+                                 constant->length,
+                                 dbcc_namespace_get_char_type(ns));
+  expr->v_constant_address.address = address;
+  return expr;
 }
 
 DBCC_Expr *
-dbcc_expr_new_enum_constant    (DBCC_EnumValue     *enum_value)
-{
-...
-}
-
-DBCC_Expr *
-dbcc_expr_new_float_constant   (size_t              sizeof_value,
+dbcc_expr_new_float_constant   (DBCC_Namespace     *global_ns,
+                                DBCC_FloatType      float_type,
                                 long double         value)
 {
-...
+  DBCC_Expr *expr = expr_alloc (DBCC_EXPR_TYPE_CONSTANT);
+  DBCC_Type *type = dbcc_namespace_get_floating_point_type (global_ns, float_type);
+  expr->base.value_type = type;
+  expr->base.constant_value = malloc (type->base.sizeof_instance);
+  dbcc_typed_value_set_long_double (type, expr->base.constant_value, value);
+  return expr;
 }
 
+/* 6.4.4.4 Character constants.
+ */
 DBCC_Expr *
-dbcc_expr_new_char_constant    (bool                is_long,
+dbcc_expr_new_char_constant    (DBCC_Type          *type,
                                 uint32_t            value)
 {
-...
+  DBCC_Expr *expr = expr_alloc (DBCC_EXPR_TYPE_CONSTANT);
+  expr->base.value_type = type;
+  expr->base.constant_value = malloc (type->base.sizeof_instance);
+  dbcc_typed_value_set_int64 (type, expr->base.constant_value, value);
+  return expr;
 }
 
-DBCC_Expr *
-dbcc_expr_new_unary            (DBCC_UnaryOperator  op,
-                                DBCC_Expr          *a)
+/* 6.5.3.3 Unary arithmetic operators
+ */
+static bool
+do_unary_operator_type_inference (DBCC_Namespace *ns,
+                                  DBCC_Expr      *expr,
+                                  DBCC_Error    **error)
 {
-...
+  if (!dbcc_expr_do_type_inference (ns, expr->v_unary.a, error))
+    return false;
+  DBCC_Expr *sub = expr->v_unary.a;
+  DBCC_Type *subtype = sub->base.value_type;
+  switch (expr->v_unary.op)
+    {
+    /* p1:  "The operand of the unary + or - operator
+             shall have arithmetic type" */
+    case DBCC_UNARY_OPERATOR_NOOP:
+    case DBCC_UNARY_OPERATOR_NEGATE:
+      // operator prefix-plus prefix-minus
+      if (!dbcc_type_is_arithmetic (subtype))
+        {
+          *error = dbcc_error_new (DBCC_ERROR_NONARITHMETIC_VALUES,
+                                   "unary + and - require a numeric argument");
+          dbcc_error_add_code_position (*error, sub->base.code_position);
+          return false;
+        }
+      expr->base.value_type = dbcc_type_dequalify (subtype);
+      if (expr->v_unary.base.constant_value != NULL)
+        {
+          const void *in = sub->base.constant_value;
+          void *out = malloc (subtype->base.sizeof_instance);
+           if (expr->v_unary.op == DBCC_UNARY_OPERATOR_NOOP)
+             {
+               /* "p2: The result of the unary + operator is the value
+                       of its (promoted) operand. The integer promotions are
+                       performed on the operand, and the result has the promoted
+                       type." */
+               memcpy (out, in,
+                       expr->base.value_type->base.sizeof_instance);
+             }
+           else
+             {
+               /* "p3: The result of the unary - operator is the negative of its
+                       (promoted) operand. The integer promotions are performed
+                       on the operand, and the result has the promoted type." */
+               dbcc_typed_value_negate (expr->base.value_type, out, in);
+             }
+        }
+      return true;
+
+    case DBCC_UNARY_OPERATOR_LOGICAL_NOT:
+      if (!dbcc_type_is_scalar (subtype))
+        {
+          *error = dbcc_error_new (DBCC_ERROR_NONSCALAR_VALUES,
+                                   "operator! requires a scalar value, got %s",
+                                   dbcc_type_to_cstring (subtype));
+          dbcc_error_add_code_position (*error, sub->base.code_position);
+          return false;
+        }
+      expr->base.value_type = dbcc_namespace_get_int_type (ns);
+      if (sub->base.constant_value != NULL)
+        {
+          expr->base.constant_value = malloc (expr->base.value_type->base.sizeof_instance);
+          int v = dbcc_typed_value_scalar_to_bool (subtype, sub->base.constant_value);
+          dbcc_typed_value_set_int64 (expr->base.value_type,
+                                      expr->base.constant_value,
+                                      v ? 1 : 0);
+        }
+      return true;
+    case DBCC_UNARY_OPERATOR_BITWISE_NOT:
+      if (!dbcc_type_is_integer (subtype))
+        {
+          *error = dbcc_error_new (DBCC_ERROR_NONINTEGER_BITWISE_OP,
+                                   "operator~ requires an integer value, got %s",
+                                   dbcc_type_to_cstring (subtype));
+          dbcc_error_add_code_position (*error, sub->base.code_position);
+          return false;
+        }
+      expr->base.value_type = dbcc_type_dequalify (subtype);
+      if (sub->base.constant_value != NULL)
+        {
+          const void *in = sub->base.constant_value;
+          void *out = malloc (subtype->base.sizeof_instance);
+          expr->base.constant_value = out;
+          dbcc_typed_value_bitwise_not (expr->base.value_type, out, in);
+        }
+      return true;
+    case DBCC_UNARY_OPERATOR_REFERENCE:
+      if (!dbcc_expr_is_lvalue (sub))
+        {
+          *error = dbcc_error_new (DBCC_ERROR_LVALUE_REQUIRED,
+                                   "cannot take the address of a non-lvalue");
+          dbcc_error_add_code_position (*error, sub->base.code_position);
+          return false;
+        }
+      expr->base.value_type = dbcc_type_new_pointer (ns->target_env, subtype);
+      return true;
+    case DBCC_UNARY_OPERATOR_DEREFERENCE:
+      if (!dbcc_type_is_pointer (subtype))
+        {
+          *error = dbcc_error_new (DBCC_ERROR_POINTER_REQUIRED,
+                                   "cannot dereference non-pointer");
+          dbcc_error_add_code_position (*error, sub->base.code_position);
+          return false;
+        }
+      expr->base.value_type = dbcc_type_pointer_dereference (subtype);
+      return true;
+    }
+  return false;
 }
 
 DBCC_Expr *
-dbcc_expr_new_structured_initializer (DBCC_Type          *type,
-                                      DBCC_StructuredInitializer *init)
+dbcc_expr_new_unary            (DBCC_Namespace     *ns,
+                                DBCC_UnaryOperator  op,
+                                DBCC_Expr          *a,
+                                DBCC_Error        **error)
 {
-...
+  DBCC_Expr *rv = expr_alloc (DBCC_EXPR_TYPE_UNARY_OP);
+  rv->v_unary.op = op;
+  rv->v_unary.a = a;
+  rv->base.code_position = dbcc_code_position_ref (a->base.code_position);
+  if (!do_unary_operator_type_inference (ns, rv, error))
+    {
+      dbcc_expr_destroy (rv);
+      return NULL;
+    }
+  return rv;
 }
 
 DBCC_Expr *
-dbcc_expr_new_ternary (DBCC_Expr *cond,
+dbcc_expr_new_structured_initializer (DBCC_StructuredInitializer *init)
+{
+  DBCC_Expr *rv = expr_alloc (DBCC_EXPR_TYPE_STRUCTURED_INITIALIZER);
+  rv->v_structured_initializer.initializer = *init;
+  return rv;
+}
+
+typedef struct FlatPieceContext FlatPieceContext;
+struct FlatPieceContext
+{
+  size_t n_flat_pieces;
+  DBCC_StructuredInitializerFlatPiece *flat_pieces;
+  size_t flat_pieces_alloced;
+};
+#define FLAT_PIECE_CONTEXT_INIT_ALLOC_SIZE 16
+#define FLAT_PIECE_CONTEXT_INIT \
+  (FlatPieceContext) { \
+    n_flat_pieces = 0, \
+    flat_pieces = malloc (FLAT_PIECE_CONTEXT_INIT_ALLOC_SIZE \
+                        * sizeof (DBCC_StructuredInitializerFlatPiece)),\
+    flat_pieces_alloced = FLAT_PIECE_CONTEXT_INIT_ALLOC_SIZE \
+  }
+
+static void
+flat_piece_context_append (FlatPieceContext *ctx,
+                           DBCC_StructuredInitializerFlatPiece *piece)
+{
+  if (ctx->n_flat_pieces == ctx->flat_pieces_alloced)
+    {
+      size_t new_alloced = ctx->flat_pieces_alloced * 2;
+      ctx->flat_pieces = realloc (ctx->flat_pieces, sizeof (DBCC_StructuredInitializerFlatPiece));
+      ctx->flat_pieces_alloced = new_alloced;
+    }
+  ctx->flat_pieces[ctx->n_flat_pieces++] = *piece;
+}
+
+static bool
+fpc_flatten_recursive (FlatPieceContext *ctx,
+                       DBCC_StructuredInitializer *init,
+                       DBCC_Type *type,
+                       size_t     offset,
+                       DBCC_Error **error)
+{
+  size_t i;
+  for (i = 0; i < init->n_pieces; i++)
+    {
+      DBCC_StructuredInitializerPiece *piece = init->pieces + i;
+
+      /* Focus in on the exact member that needs
+       * initialization and compute flat-piece,
+       * or recurse if it's another structured-initializer.
+       */
+      DBCC_Type *subtype = dbcc_type_dequalify (type);
+      unsigned suboffset = offset;
+      size_t d;
+      for (d = 0; d < piece->n_designators; d++)
+        {
+          switch (piece->designators[d].type)
+            {
+            case DBCC_DESIGNATOR_INDEX:
+              if (subtype->metatype != DBCC_TYPE_METATYPE_ARRAY)
+                {
+                  *error = ...;
+                  ...
+                  return false;
+                }
+              suboffset = ...;
+              subtype = dbcc_type_dequalify (subtype->v_array.element_type);
+              break;
+
+            case DBCC_DESIGNATOR_MEMBER:
+              if (subtype->metatype == DBCC_TYPE_METATYPE_STRUCT)
+                {
+                  ...
+                }
+              else if (subtype->metatype == DBCC_TYPE_METATYPE_UNION)
+                {
+                  ...
+                }
+              else
+                {
+                  ...
+                }
+              break;
+            }
+        }
+
+      /* If it is an expression, output a FlatPiece.
+       * If it is a structured-initializer, recurse.
+       */
+      if (pieces->is_expr)
+        {
+          ...
+        }
+      else
+        {
+          if (!fpc_flatten_recursive (ctx,
+                                      &piece->v_structured_initializer,
+                                      subtype,
+                                      suboffset,
+                                      error))
+            {
+              /* TODO: sometimes, adorning the error with the
+               * structured-initializer trace might
+               * be useful, but for normal error presentation,
+               * i think it's probably more confusing than helpful.
+               */
+              return false;
+            }
+        }
+    }
+  return true;
+}
+
+bool
+dbcc_expr_structured_initializer_set_type (DBCC_Namespace *ns,
+                                           DBCC_Expr *si,
+                                           DBCC_Type *type,
+                                           DBCC_Error **error)
+{
+  /* Type must be array (fixed or unsized), or struct/union.  */
+  FlatPieceContext fpc = FLAT_PIECE_CONTEXT_INIT;
+  if (!fpc_flatten_recursive (&fpc, &si->v_structured_initializer.initializer,
+                              type, 0,
+                              error))
+    return false;
+  else
+    {
+      *error = dbcc_error_new (DBCC_ERROR_BAD_STRUCTURED_INITIALIZER_TYPE,
+                               "{}-instance initialization requires array, struct, or union");
+      dbcc_error_add_code_position (*error, si->base.code_position);
+      return false;
+    }
+}
+
+
+/* 6.5.15 Conditional operator.
+ * p2 the first operand shall have scalar type.
+ * p3: One of the following shall hold for the second and third operands:
+ *   — both operands have arithmetic type;   [CASE1]
+ *   — both operands have the same structure or union type; [CASE2]
+ *   — both operands have void type; [CASE3]
+ *
+ *   — both operands are pointers to qualified or unqualified versions
+ *     of compatible types;
+ *   — one operand is a pointer and the other is a null pointer constant; or
+ *   — one operand is a pointer to an object type and the other is a pointer
+ *     to a qualified or unqualified version of void.
+ *   [CASE4 - handle all these 3 pointer cases]
+ */
+static bool
+do_ternary_operator_type_inference (DBCC_Namespace *ns,
+                                    DBCC_Expr *expr,
+                                    DBCC_Error **error)
+{
+  if (!dbcc_type_is_scalar (expr->v_ternary.condition->base.value_type))
+    {
+      ...
+    }
+  DBCC_Expr *aexpr = expr->v_ternary.true_value;
+  DBCC_Type *atype = aexpr->base.value_type;
+  DBCC_Expr *bexpr = expr->v_ternary.false_value;
+  DBCC_Type *btype = bexpr->base.value_type;
+  assert(atype != NULL && btype != NULL);
+
+  /* CASE1: both types arithmetic. */
+  if (dbcc_type_is_arithmetic (atype) && dbcc_type_is_arithmetic (btype))
+    {
+      /* p5: usual arithmetic conversions */
+    ..
+    }
+
+  DBCC_Type *adeq = dbcc_type_dequalify (atype);
+  DBCC_Type *bdeq = dbcc_type_dequalify (btype);
+ 
+  /* CASE2: both operands have the same structure or union type */
+  if (adeq->metatype == bdeq->metatype)
+    {
+      if (adeq->metatype == DBCC_TYPE_METATYPE_STRUCT
+       || adeq->metatype == DBCC_TYPE_METATYPE_UNION)
+        {
+          if (adeq == bdeq)
+            {
+              expr->base.value_type = adeq;
+            }
+          else
+            {
+              ...
+            }
+        }
+    }
+
+  /* CASE3: both operands are of type void */
+  if (adeq->metatype == DBCC_TYPE_METATYPE_VOID
+   && bdeq->metatype == DBCC_TYPE_METATYPE_VOID)
+    {
+      expr->base.value_type = adeq;
+      return true;
+    }
+
+
+  /* CASE4: both operands are pointers.
+   * This is governed by p6, which we break into clauses as follows:
+   */
+  if (dbcc_type_is_pointer (adeq) && dbcc_type_is_pointer (bdeq))
+    {
+      DBCC_Type *a_pointed_at = dbcc_type_pointer_dereference (adeq);
+      DBCC_Type *b_pointed_at = dbcc_type_pointer_dereference (bdeq);
+      /* "If both the second and third operands are pointers
+          or one is a null pointer constant and the
+          other is a pointer, the result type is a pointer
+          to a type qualified with all the type qualifiers
+          of the types referenced by both operands." */
+      if (dbcc_expr_is_null_pointer_constant (adeq)
+       || dbcc_expr_is_null_pointer_constant (bdeq))
+        {
+          ...
+        }
+      
+      /* "Furthermore, if both operands are pointers to
+          compatible types or to differently qualified versions
+          of compatible types, the result type is
+          a pointer to an appropriately qualified version of
+          the composite type; if one operand is a
+          null pointer constant, the result has the type of the other operand;
+          otherwise, one operand is a pointer to void or a qualified version
+          of void, in which case the result type is a
+          pointer to an appropriately qualified version of void." */
+      if (...)
+        {
+          ....
+        }
+      return true; //XXX????
+    }
+
+  ... fail?
+  return false;
+}
+
+DBCC_Expr *
+dbcc_expr_new_ternary (DBCC_Namespace *ns,
+                       DBCC_Expr *cond,
                        DBCC_Expr *a,
-                       DBCC_Expr *b)
+                       DBCC_Expr *b,
+                       DBCC_Error **error)
 {
-...
+  if (cond->base.value_type != NULL
+   && !dbcc_type_is_scalar (cond->base.value_type))
+    {
+      *error = dbcc_error_new (DBCC_ERROR_TERNARY_CONDITION_NON_SCALAR,
+                               "conditional expression for ? : operator was not a scalar");
+      dbcc_error_add_code_position (*error, cond->base.code_position);
+      return NULL;
+    }
+  DBCC_Expr *rv = expr_alloc (DBCC_EXPR_TYPE_TERNARY_OP);
+  rv->base.v_ternary.condition = cond;
+  rv->base.v_ternary.true_value = a;
+  rv->base.v_ternary.false_value = b;
+  if (cond->base.value_type != NULL
+   && a->base.value_type != NULL
+   && b->base.value_type != NULL)
+    {
+      if (!do_ternary_operator_type_inference (ns, rv, error))
+        {
+          dbcc_expr_destroy (rv);
+          return NULL;
+        }
+    }
+  return rv;
 }
 
 void
@@ -1355,4 +2162,109 @@ bool dbcc_expr_is_null_pointer_constant (DBCC_Expr *expr)
     }
   else
     return false;
+}
+
+bool
+dbcc_expr_do_type_inference (DBCC_Namespace *ns,
+                             DBCC_Expr *expr,
+                             DBCC_Error **error)
+{
+  if (expr->base.types_inferred)
+    return true;
+
+  switch (expr->type)
+    {
+    case DBCC_EXPR_TYPE_UNARY_OP:
+      if (!dbcc_expr_do_type_inference (ns, expr->v_unary.a, error))
+        return false;
+      if (!do_unary_operator_type_inference (ns, expr, error))
+        return false;
+      return true;
+
+    case DBCC_EXPR_TYPE_BINARY_OP:
+      if (!dbcc_expr_do_type_inference (ns, expr->v_binary.a, error)
+       || !dbcc_expr_do_type_inference (ns, expr->v_binary.b, error))
+        return false;
+      assert(op < DBCC_N_BINARY_OPERATORS);
+      assert(binary_operator_handlers[op] != NULL);
+      if (!(*(binary_operator_handlers[op]))(ns, expr, error))
+        return false;
+      return true;
+
+    case DBCC_EXPR_TYPE_TERNARY_OP:
+      if (!dbcc_expr_do_type_inference (ns, expr->v_ternary.condition, error)
+       || !dbcc_expr_do_type_inference (ns, expr->v_binary.a, error)
+       || !dbcc_expr_do_type_inference (ns, expr->v_binary.b, error))
+        return false;
+
+      /* Compute type and do constant folding.  */
+      if (!do_ternary_operator_type_inference (ns, expr, error))
+        {
+          dbcc_expr_destroy (rv);
+          return NULL;
+        }
+
+      return true;
+
+    case DBCC_EXPR_TYPE_INPLACE_BINARY_OP:
+      if (expr->v_inplace_binary.inout->base.value_type == NULL
+       && !dbcc_expr_do_type_inference (ns,
+                                        expr->v_inplace_binary.inout,
+                                        error))
+        return false;
+      if (expr->v_inplace_binary.b->base.value_type == NULL
+       && !dbcc_expr_do_type_inference (ns,
+                                        expr->v_inplace_binary.b,
+                                        error))
+        return false;
+      expr->base.value_type = expr->v_inplace_binary.inout->base.value_type;
+      break;
+
+    case DBCC_EXPR_TYPE_INPLACE_UNARY_OP:
+      if (expr->v_inplace_unary.inout->base.value_type == NULL
+       && !dbcc_expr_do_type_inference (ns,
+                                        expr->v_inplace_unary.inout,
+                                        error))
+        return false;
+      expr->base.value_type = expr->v_inplace_unary.inout->base.value_type;
+      break;
+
+    case DBCC_EXPR_TYPE_CONSTANT:
+      return true;
+
+    case DBCC_EXPR_TYPE_CONSTANT_ADDRESS:
+      return true;
+
+    case DBCC_EXPR_TYPE_CALL:
+      if (!do_call_type_inference (ns, expr, error))
+        return false;
+      return true;
+
+    case DBCC_EXPR_TYPE_CAST:
+      DBCC_Expr *sub_expr = expr->v_cast.pre_cast_expr;
+      DBCC_ExprType sub_expr_type = sub_expr->type;
+      if (sub_expr_type == DBCC_EXPR_TYPE_STRUCTURED_INITIALIZER)
+        {
+          if (!dbcc_expr_structured_initializer_set_type
+                   (ns, sub_expr, ..., error))
+            return false;
+        }
+      else
+        {
+          if (!dbcc_expr_do_type_inference (ns, sub_expr, error))
+            {
+              ...
+            }
+          ... castable??
+        }
+      return true;
+
+    case DBCC_EXPR_TYPE_ACCESS:
+      ...
+
+    case DBCC_EXPR_TYPE_STRUCTURED_INITIALIZER:
+      *error = dbcc_error_new (DBCC_ERROR_CANNOT_INFER_TYPE,
+                               ...);
+      return false;
+    }
 }

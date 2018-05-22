@@ -1,24 +1,71 @@
 
 typedef struct DBCC_NamespaceEntry DBCC_NamespaceEntry;
-typedef struct DBCC_Namespace DBCC_Namespace;
+typedef struct DBCC_NamespaceScope DBCC_NamespaceScope;
+
+typedef struct DBCC_Address_Offset DBCC_Address_Offset;
+typedef struct DBCC_Address_Base DBCC_Address_Base;
 
 typedef enum
 {
   DBCC_NAMESPACE_ENTRY_TYPEDEF,
   DBCC_NAMESPACE_ENTRY_ENUM_VALUE,
-  DBCC_NAMESPACE_ENTRY_GLOBAL
+  DBCC_NAMESPACE_ENTRY_GLOBAL,
+  DBCC_NAMESPACE_ENTRY_LOCAL
 } DBCC_NamespaceEntryType;
+
+typedef enum
+{
+  DBCC_ADDRESS_TYPE_EXTERNAL,
+  DBCC_ADDRESS_TYPE_GLOBAL,
+  DBCC_ADDRESS_TYPE_CONSTANT,
+  DBCC_ADDRESS_TYPE_OFFSET,
+} DBCC_Address_Type;
+struct DBCC_Address_Base
+{
+  DBCC_Address_Type type;
+};
+
+struct DBCC_Address_Offset
+{
+  DBCC_Address_Base address_base;
+  DBCC_Address *underlying_address;
+  int64_t delta;
+};
+
+  
+struct DBCC_Global
+{
+  DBCC_Address_Base address_base;
+  DBCC_Namespace *global_ns;
+  DBCC_Type *type;
+  DBCC_Symbol *name;
+
+  // note: this is into the pointer into the code (text) segment.
+  // only if 'generated' is true.
+  //
+  // This is for GLOBAL and CONSTANT addresses.
+  size_t address_offset;
+};
+
+struct DBCC_Local
+{
+  DBCC_Namespace *local_ns;
+  DBCC_Type *type;
+  DBCC_Symbol *name;
+  DBCC_NamespaceScope *scope;
+};
 
 struct DBCC_NamespaceEntry
 {
   DBCC_NamespaceEntryType entry_type;
   union {
     DBCC_Type *v_typedef;
-    DBCC_EnumValue *v_enum_value;
     struct {
-      DBCC_Type *type;
-      DBCC_Statement *impl;             /* only for inline functions */
-    } v_global;
+      DBCC_Type *enum_type;
+      DBCC_EnumValue *enum_value;
+    } v_enum_value;
+    DBCC_Global *v_global;
+    DBCC_Local *v_local;
   };
 };
 
@@ -71,6 +118,16 @@ DBCC_Type * dbcc_namespace_get_float_imaginary_type   (DBCC_Namespace *ns);
 DBCC_Type * dbcc_namespace_get_double_imaginary_type  (DBCC_Namespace *ns);
 DBCC_Type * dbcc_namespace_get_long_double_imaginary_type (DBCC_Namespace *ns);
 
+/* Global namespace functions to create DBCC_Addresses from
+ * constant data etc.
+ */
+DBCC_Address *dbcc_namespace_global_allocate_constant (DBCC_Namespace *ns,
+                                                       size_t length,
+                                                       const uint8_t *data);
+DBCC_Address *dbcc_namespace_global_allocate_constant0(DBCC_Namespace *ns,
+                                                       size_t length,
+                                                       const uint8_t *data);
+
 /* Fixed-width types. */
 DBCC_Type * dbcc_namespace_get_integer_type           (DBCC_Namespace  *ns,
                                                        bool is_signed,
@@ -101,3 +158,9 @@ DBCC_Type * dbcc_namespace_get_imaginary_long_double_type(DBCC_Namespace *);
 DBCC_Type * dbcc_namespace_get_complex_float_type     (DBCC_Namespace *);
 DBCC_Type * dbcc_namespace_get_complex_double_type    (DBCC_Namespace *);
 DBCC_Type * dbcc_namespace_get_complex_long_double_type(DBCC_Namespace *);
+
+// '\0', 'L', 'u', 'U'
+DBCC_Type * dbcc_namespace_get_constant_char_type     (char  prefix);
+
+DBCC_Type * dbcc_namespace_get_floating_point_type    (DBCC_Namespace *ns,
+                                                       DBCC_FloatType  ftype);

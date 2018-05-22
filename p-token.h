@@ -35,9 +35,13 @@ struct P_Token
       };
     } v_i_constant;
     struct {
-      uint8_t sizeof_value;     // 4, 8, 10
+      DBCC_FloatType float_type;
       long double v_long_double;
     } v_f_constant;
+    struct {
+      char prefix;              // '\0', 'L', 'u', 'U'
+      uint32_t code;
+    } v_char_constant;
 
     DBCC_Symbol *v_func_name;
 
