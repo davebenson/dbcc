@@ -1456,31 +1456,31 @@ dbcc_expr_new_inplace_unary    (DBCC_Namespace     *ns,
   return rv;
 }
 
-DBCC_Expr *
-dbcc_expr_new_access           (DBCC_Namespace     *ns,
-                                bool                is_pointer,
-                                DBCC_Expr          *expr,
-                                DBCC_Symbol        *name,
-                                DBCC_Error        **error)
+static bool
+do_access_type_inference (DBCC_Namespace *ns,
+                          DBCC_Expr *access,
+                          DBCC_Error **error)
 {
-  DBCC_Type *deq_type = dbcc_type_dequalify (expr->base.value_type);
-  if (is_pointer)
+  DBCC_Expr *object = access->v_access.object;
+  if (object->base.value_type == NULL
+   && !dbcc_expr_do_type_inference (ns, object, error))
+    return false;
+
+  DBCC_Type *deq_type = dbcc_type_dequalify (object->base.value_type);
+  if (access->v_access.is_pointer)
     {
       if (!dbcc_type_is_pointer (deq_type))
         {
           *error = dbcc_error_new (DBCC_ERROR_EXPECTED_POINTER,
                                    "operator -> must apply to a pointer, got %s",
                                    dbcc_type_to_cstring (deq_type));
-          dbcc_error_add_code_position (*error, expr->base.code_position);
+          dbcc_error_add_code_position (*error, access->base.code_position);
           return NULL;
         }
       deq_type = dbcc_type_pointer_dereference (deq_type);
       deq_type = dbcc_type_dequalify (deq_type);
     }
-  DBCC_Type *member_type = NULL;
-  void *sub_info = NULL;
-  bool is_union = false;
-  (void) ns;
+  DBCC_Symbol *name = access->v_access.name;
   switch (deq_type->metatype)
     {
     case DBCC_TYPE_METATYPE_STRUCT:
@@ -1488,8 +1488,8 @@ dbcc_expr_new_access           (DBCC_Namespace     *ns,
         {
           *error = dbcc_error_new (DBCC_ERROR_MEMBER_ACCESS_INCOMPLETE_TYPE,
                                    "structure incomplete, so cannot access member");
-          dbcc_error_add_code_position (*error, expr->base.code_position);
-          return NULL;
+          dbcc_error_add_code_position (*error, access->base.code_position);
+          return false;
         }
       DBCC_TypeStructMember *member = dbcc_type_struct_lookup_member (deq_type, name);
       if (member == NULL)
@@ -1497,19 +1497,20 @@ dbcc_expr_new_access           (DBCC_Namespace     *ns,
           *error = dbcc_error_new (DBCC_ERROR_UNKNOWN_MEMBER_ACCESS,
                                    "unknown member %s",
                                    dbcc_symbol_get_string (name));
-          dbcc_error_add_code_position (*error, expr->base.code_position);
-          return NULL;
+          dbcc_error_add_code_position (*error, access->base.code_position);
+          return false;
         }
-      member_type = member->type;
-      sub_info = member;
-      break;
+      access->base.value_type = member->type;
+      access->v_access.sub_info = member;
+      access->v_access.is_union = false;
+      return true;
     case DBCC_TYPE_METATYPE_UNION:
       if (deq_type->v_union.incomplete)
         {
           *error = dbcc_error_new (DBCC_ERROR_MEMBER_ACCESS_INCOMPLETE_TYPE,
                                    "union incomplete, so cannot access branch");
-          dbcc_error_add_code_position (*error, expr->base.code_position);
-          return NULL;
+          dbcc_error_add_code_position (*error, access->base.code_position);
+          return false;
         }
       DBCC_TypeUnionBranch *branch = dbcc_type_union_lookup_branch (deq_type, name);
       if (branch == NULL)
@@ -1517,28 +1518,41 @@ dbcc_expr_new_access           (DBCC_Namespace     *ns,
           *error = dbcc_error_new (DBCC_ERROR_UNKNOWN_MEMBER_ACCESS,
                                    "unknown member %s",
                                    dbcc_symbol_get_string (name));
-          dbcc_error_add_code_position (*error, expr->base.code_position);
-          return NULL;
+          dbcc_error_add_code_position (*error, access->base.code_position);
+          return false;
         }
-      member_type = branch->type;
-      sub_info = branch;
-      is_union = true;
-      break;
+      access->base.value_type = branch->type;
+      access->v_access.sub_info = branch;
+      access->v_access.is_union = true;
+      return true;
     default:
       *error = dbcc_error_new (DBCC_ERROR_BAD_TYPE_FOR_MEMBER_ACCESS,
                                "no members of type %s",
                                dbcc_type_to_cstring (deq_type));
-      dbcc_error_add_code_position (*error, expr->base.code_position);
-      return NULL;
+      dbcc_error_add_code_position (*error, access->base.code_position);
+      return false;
     }
+}
+
+DBCC_Expr *
+dbcc_expr_new_access           (DBCC_Namespace     *ns,
+                                bool                is_pointer,
+                                DBCC_Expr          *expr,
+                                DBCC_Symbol        *name,
+                                DBCC_Error        **error)
+{
 
   DBCC_Expr *rv = expr_alloc (DBCC_EXPR_TYPE_ACCESS);
-  rv->base.value_type = member_type;
   rv->v_access.object = expr;
   rv->v_access.name = name;
-  rv->v_access.sub_info = sub_info;
-  rv->v_access.is_union = is_union;
   rv->v_access.is_pointer = is_pointer;
+
+  if (expr->base.value_type != NULL
+   && !do_access_type_inference (ns, rv, error))
+    {
+      dbcc_expr_destroy (rv);
+      return NULL;
+    }
 
   // TODO: CONSTANT FOLDING???
   //rv->base.constant_value = 
@@ -1848,6 +1862,7 @@ dbcc_expr_new_structured_initializer (DBCC_StructuredInitializer *init)
 typedef struct FlatPieceContext FlatPieceContext;
 struct FlatPieceContext
 {
+  DBCC_Namespace *namespace;
   size_t n_flat_pieces;
   DBCC_StructuredInitializerFlatPiece *flat_pieces;
   size_t flat_pieces_alloced;
@@ -1855,10 +1870,10 @@ struct FlatPieceContext
 #define FLAT_PIECE_CONTEXT_INIT_ALLOC_SIZE 16
 #define FLAT_PIECE_CONTEXT_INIT \
   (FlatPieceContext) { \
-    n_flat_pieces = 0, \
-    flat_pieces = malloc (FLAT_PIECE_CONTEXT_INIT_ALLOC_SIZE \
+    .n_flat_pieces = 0, \
+    .flat_pieces = malloc (FLAT_PIECE_CONTEXT_INIT_ALLOC_SIZE \
                         * sizeof (DBCC_StructuredInitializerFlatPiece)),\
-    flat_pieces_alloced = FLAT_PIECE_CONTEXT_INIT_ALLOC_SIZE \
+    .flat_pieces_alloced = FLAT_PIECE_CONTEXT_INIT_ALLOC_SIZE \
   }
 
 static void
@@ -1898,39 +1913,90 @@ fpc_flatten_recursive (FlatPieceContext *ctx,
           switch (piece->designators[d].type)
             {
             case DBCC_DESIGNATOR_INDEX:
+              {
+              DBCC_Expr *index = piece->designators[d].v_index;
               if (subtype->metatype != DBCC_TYPE_METATYPE_ARRAY)
                 {
-                  *error = ...;
-                  ...
+                  *error = dbcc_error_new (DBCC_ERROR_EXPECTED_ARRAY,
+                                           "array-style designator for static initializer not allowed for type %s",
+                                           dbcc_type_to_cstring (subtype));
+                  dbcc_error_add_code_position (*error, index->base.code_position);
                   return false;
                 }
-              suboffset = ...;
+              if (dbcc_type_is_integer (index->base.value_type))
+                {
+                  *error = dbcc_error_new (DBCC_ERROR_NONINTEGER_DESIGNATOR,
+                                           "designator index in structured-initializer is non-integer, was type %s",
+                                           dbcc_type_to_cstring (index->base.value_type));
+                  dbcc_error_add_code_position (*error, index->base.code_position);
+                  return false;
+                }
+              if (index->base.constant_value == NULL)
+                {
+                  *error = dbcc_error_new (DBCC_ERROR_CONSTANT_REQUIRED,
+                                           "designator indexing expression must be a constant");
+                  //TODO set code position
+                  return false;
+                }
+              int64_t v = dbcc_typed_value_get_int64 (index->base.value_type, index->base.constant_value);
               subtype = dbcc_type_dequalify (subtype->v_array.element_type);
+              suboffset += subtype->base.sizeof_instance * v;
               break;
+              }
 
             case DBCC_DESIGNATOR_MEMBER:
+              {
+              DBCC_Symbol *name = piece->designators[d].v_member;
               if (subtype->metatype == DBCC_TYPE_METATYPE_STRUCT)
                 {
-                  ...
+                  DBCC_TypeStructMember *member = dbcc_type_struct_lookup_member (subtype, name);
+                  if (member == NULL)
+                    {
+                      *error = dbcc_error_new (DBCC_ERROR_DESIGNATOR_NOT_FOUND,
+                                               "struct does not have member %s",
+                                               dbcc_symbol_get_string (name));
+                      return false;
+                    }
+                  subtype = member->type;
+                  suboffset += member->offset;
                 }
               else if (subtype->metatype == DBCC_TYPE_METATYPE_UNION)
                 {
-                  ...
+                  DBCC_TypeUnionBranch *branch = dbcc_type_union_lookup_branch (subtype, name);
+                  if (branch == NULL)
+                    {
+                      *error = dbcc_error_new (DBCC_ERROR_DESIGNATOR_NOT_FOUND,
+                                               "union does not have branch %s",
+                                               dbcc_symbol_get_string (name));
+                      return false;
+                    }
+                  subtype = branch->type;
                 }
               else
                 {
-                  ...
+                  *error = dbcc_error_new (DBCC_ERROR_CONSTANT_REQUIRED,
+                                           "named designator must be struct or union");
+                  //TODO set code position
+                  return false;
                 }
               break;
+              }
             }
         }
 
       /* If it is an expression, output a FlatPiece.
        * If it is a structured-initializer, recurse.
        */
-      if (pieces->is_expr)
+      if (piece->is_expr)
         {
-          ...
+          if (!dbcc_expr_do_type_inference (ctx->namespace, piece->v_expr, error))
+            return false;
+          DBCC_StructuredInitializerFlatPiece fp = {
+            .offset = suboffset,
+            .length = subtype->base.sizeof_instance,
+            .piece_expr = piece->v_expr
+          };
+          flat_piece_context_append (ctx, &fp);
         }
       else
         {
@@ -1960,17 +2026,19 @@ dbcc_expr_structured_initializer_set_type (DBCC_Namespace *ns,
 {
   /* Type must be array (fixed or unsized), or struct/union.  */
   FlatPieceContext fpc = FLAT_PIECE_CONTEXT_INIT;
+  fpc.namespace = ns;
   if (!fpc_flatten_recursive (&fpc, &si->v_structured_initializer.initializer,
                               type, 0,
                               error))
     return false;
-  else
-    {
-      *error = dbcc_error_new (DBCC_ERROR_BAD_STRUCTURED_INITIALIZER_TYPE,
-                               "{}-instance initialization requires array, struct, or union");
-      dbcc_error_add_code_position (*error, si->base.code_position);
-      return false;
-    }
+
+  si->base.value_type = type;
+  si->v_structured_initializer.n_flat_pieces = fpc.n_flat_pieces;
+  si->v_structured_initializer.flat_pieces = fpc.flat_pieces;
+
+  // TODO: constant folding?
+
+  return true;
 }
 
 
@@ -1993,10 +2061,18 @@ do_ternary_operator_type_inference (DBCC_Namespace *ns,
                                     DBCC_Expr *expr,
                                     DBCC_Error **error)
 {
-  if (!dbcc_type_is_scalar (expr->v_ternary.condition->base.value_type))
+  DBCC_Expr *cond = expr->v_ternary.condition;
+  if (!dbcc_type_is_scalar (cond->base.value_type))
     {
-      ...
+      *error = dbcc_error_new (DBCC_ERROR_NONSCALAR_VALUES,
+                               "first argument to ? : must be scalar (boolean-izeable)");
+      dbcc_error_add_code_position (*error, expr->base.code_position);
+      return false;
     }
+  bool cond_is_constant = cond->base.constant_value != NULL;
+  bool cond_is_true = cond_is_constant
+           && !dbcc_is_zero (cond->base.value_type->base.sizeof_instance,
+                             cond->base.constant_value);
   DBCC_Expr *aexpr = expr->v_ternary.true_value;
   DBCC_Type *atype = aexpr->base.value_type;
   DBCC_Expr *bexpr = expr->v_ternary.false_value;
@@ -2007,7 +2083,29 @@ do_ternary_operator_type_inference (DBCC_Namespace *ns,
   if (dbcc_type_is_arithmetic (atype) && dbcc_type_is_arithmetic (btype))
     {
       /* p5: usual arithmetic conversions */
-    ..
+      DBCC_Type *type = usual_arithment_conversion_get_type (ns, atype, btype);
+      if (type == NULL)
+        {
+          assert(0);
+          return false;
+        }
+      expr->base.value_type = type;
+
+      /* constant folding */
+      if (cond_is_constant)
+        {
+          DBCC_Expr *vexpr = cond_is_true ? aexpr : bexpr;
+          if (vexpr->base.constant_value != NULL)
+            {
+              void *cv = malloc (type->base.sizeof_instance);
+              dbcc_cast_value (type,
+                               cv,
+                               vexpr->base.value_type,
+                               vexpr->base.constant_value);
+              expr->base.constant_value = cv;
+            }
+        }
+      return true;
     }
 
   DBCC_Type *adeq = dbcc_type_dequalify (atype);
@@ -2246,21 +2344,21 @@ dbcc_expr_do_type_inference (DBCC_Namespace *ns,
       if (sub_expr_type == DBCC_EXPR_TYPE_STRUCTURED_INITIALIZER)
         {
           if (!dbcc_expr_structured_initializer_set_type
-                   (ns, sub_expr, ..., error))
+                   (ns, sub_expr, expr->v_cast.type, error))
             return false;
         }
       else
         {
           if (!dbcc_expr_do_type_inference (ns, sub_expr, error))
-            {
-              ...
-            }
+            return false;
           ... castable??
         }
       return true;
 
     case DBCC_EXPR_TYPE_ACCESS:
-      ...
+      if (!do_access_type_inference (ns, rv, error))
+        return false;
+      return true;
 
     case DBCC_EXPR_TYPE_STRUCTURED_INITIALIZER:
       *error = dbcc_error_new (DBCC_ERROR_CANNOT_INFER_TYPE,

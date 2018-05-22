@@ -299,8 +299,8 @@ bool dbcc_type_is_real (DBCC_Type *type);
 
 // This will do sign-extension as needed.
 // Type must be INT or ENUM.
-uint64_t   dbcc_type_value_to_uint64 (DBCC_Type *type,
-                                      const void *value);
+uint64_t   dbcc_typed_value_get_int64 (DBCC_Type *type,
+                                       const void *value);
 void       dbcc_typed_value_set_int64(DBCC_Type  *type,
                                       const void *out,
                                       int64_t     v);
