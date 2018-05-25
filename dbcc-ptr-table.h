@@ -11,7 +11,7 @@ struct DBCC_PtrTable_Entry
 };
 struct DBCC_PtrTable
 {
-  size_t size;          /* prime */
+  size_t size;          /* prime or 0*/
   size_t occupancy;
   DBCC_PtrTable_Entry **table;
 };

@@ -19,7 +19,6 @@ typedef struct DBCC_StructuredInitializerPiece DBCC_StructuredInitializerPiece;
 typedef struct DBCC_StructuredInitializer DBCC_StructuredInitializer;
 typedef struct DBCC_StructuredInitializerExpr DBCC_StructuredInitializerExpr;
 typedef struct DBCC_StructuredInitializerFlatPiece DBCC_StructuredInitializerFlatPiece;
-typedef struct DBCC_StructuredInitializerZeroPiece DBCC_StructuredInitializerZeroPiece;
 
 typedef enum DBCC_IdentifierType {
   DBCC_IDENTIFIER_TYPE_UNKNOWN,         // must be 0
@@ -36,7 +35,6 @@ typedef enum
   DBCC_EXPR_TYPE_INPLACE_BINARY_OP,
   DBCC_EXPR_TYPE_INPLACE_UNARY_OP,
   DBCC_EXPR_TYPE_CONSTANT,
-  DBCC_EXPR_TYPE_CONSTANT_ADDRESS,
   DBCC_EXPR_TYPE_CALL,
   DBCC_EXPR_TYPE_CAST,
   DBCC_EXPR_TYPE_ACCESS,
@@ -48,8 +46,10 @@ struct DBCC_Expr_Base
 {
   DBCC_Expr_Type type;
   DBCC_Type *value_type;
-  void *constant_value;
+  DBCC_Constant *constant;
   DBCC_CodePosition *code_position;
+
+  unsigned types_inferred : 1;
 };
 
 struct DBCC_BinaryOperatorExpr
@@ -280,7 +280,7 @@ DBCC_Expr *dbcc_expr_new_subscript        (DBCC_Namespace     *ns,
 // Namespace may be NULL, just for this function,
 // to indicate that you want symbol-resolution awaits the next
 // phase of analysis.
-DBCC_Expr *dbcc_expr_new_symbol           (DBCC_Namespace     *ns,
+DBCC_Expr *dbcc_expr_new_identifier       (DBCC_Namespace     *ns,
                                            DBCC_Symbol        *symbol,
                                            DBCC_Error        **error);
 DBCC_Expr *dbcc_expr_new_int_constant     (DBCC_Type          *type,
@@ -301,9 +301,11 @@ DBCC_Expr *dbcc_expr_new_unary            (DBCC_Namespace     *ns,
 void       dbcc_expr_add_code_position    (DBCC_Expr          *expr,
                                            DBCC_CodePosition  *cp);
 
-DBCC_Expr *dbcc_expr_new_ternary (DBCC_Expr *cond,
+DBCC_Expr *dbcc_expr_new_ternary (DBCC_Namespace *ns,
+                                  DBCC_Expr *cond,
                                   DBCC_Expr *a,
-                                  DBCC_Expr *b);
+                                  DBCC_Expr *b,
+                                  DBCC_Error **error);
 
 bool dbcc_expr_is_lvalue (DBCC_Expr *expr);
 bool dbcc_expr_is_null_pointer_constant (DBCC_Expr *expr);

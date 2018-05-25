@@ -12,8 +12,6 @@
 typedef struct DBCC_Symbol DBCC_Symbol;
 typedef struct DBCC_SymbolSpace DBCC_SymbolSpace;
 
-#define DBCC_INLINE inline
-
 struct DBCC_SymbolSpace
 {
   unsigned ht_size_log2;
@@ -31,6 +29,7 @@ struct DBCC_Symbol
   /* NUL-terminated string follows immediately */
 };
 
+DBCC_SymbolSpace *dbcc_symbol_space_new (void);
 DBCC_Symbol       *dbcc_symbol_space_force     (DBCC_SymbolSpace *space,
                                                 const char *str);
 DBCC_Symbol       *dbcc_symbol_space_try       (DBCC_SymbolSpace *space,
@@ -49,9 +48,11 @@ uint32_t           dbcc_symbol_hash_len        (size_t      len,
                                                 const char *str);
 
 
+#if DBCC_CAN_INLINE || defined(DBCC_IMPLEMENT_INLINES)
 DBCC_INLINE const char *dbcc_symbol_get_string (const DBCC_Symbol *symbol)
 {
   return (const char *) (symbol + 1);
 }
+#endif
 
 #define dbcc_symbol_unref(s) do{}while(0)

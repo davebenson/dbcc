@@ -1,6 +1,7 @@
 
 typedef struct DBCC_NamespaceEntry DBCC_NamespaceEntry;
 typedef struct DBCC_NamespaceScope DBCC_NamespaceScope;
+typedef struct DBCC_NamespaceBuiltins DBCC_NamespaceBuiltins;
 
 typedef struct DBCC_Address_Offset DBCC_Address_Offset;
 typedef struct DBCC_Address_Base DBCC_Address_Base;
@@ -71,6 +72,8 @@ struct DBCC_NamespaceEntry
 
 struct DBCC_Namespace
 {
+  bool is_global;
+  unsigned ref_count;
   DBCC_SymbolSpace *symbol_space;
   DBCC_PtrTable symbols;                /* typedefs, enum-values, function names, global variables */
   DBCC_PtrTable struct_tag_symbols;
@@ -78,15 +81,16 @@ struct DBCC_Namespace
   DBCC_PtrTable union_tag_symbols;
 
   DBCC_TargetEnvironment *target_env;
+  DBCC_NamespaceBuiltins *builtins;
 
   DBCC_Namespace *chain;                /* if lookups fail, go to parent */
 };
 
 DBCC_Namespace *
-dbcc_namespace_new_global        (void);
+dbcc_namespace_new_global        (DBCC_TargetEnvironment *target_env);
 
 DBCC_Namespace *
-dbcc_namespace_new_scope         (void);
+dbcc_namespace_new_local         (DBCC_Namespace *global);
 
 bool
 dbcc_namespace_lookup            (DBCC_Namespace      *ns,
@@ -109,14 +113,6 @@ void dbcc_namespace_add_by_tag   (DBCC_Namespace      *ns,
 
 void dbcc_namespace_add_enum_value (DBCC_Namespace *ns,
                                     DBCC_EnumValue *enum_value);
-
-/* Complex Types. TODO: spec ref */
-DBCC_Type * dbcc_namespace_get_float_complex_type     (DBCC_Namespace *ns);
-DBCC_Type * dbcc_namespace_get_double_complex_type    (DBCC_Namespace *ns);
-DBCC_Type * dbcc_namespace_get_long_double_complex_type (DBCC_Namespace *ns);
-DBCC_Type * dbcc_namespace_get_float_imaginary_type   (DBCC_Namespace *ns);
-DBCC_Type * dbcc_namespace_get_double_imaginary_type  (DBCC_Namespace *ns);
-DBCC_Type * dbcc_namespace_get_long_double_imaginary_type (DBCC_Namespace *ns);
 
 /* Global namespace functions to create DBCC_Addresses from
  * constant data etc.

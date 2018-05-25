@@ -1,11 +1,11 @@
 CC = cc
 CFLAGS = -W -Wall -g -std=c11
 
-all: tests/test-parser
+all: generated tests/test-parser
 
 libdbcc.a: dbcc-parser-p.o dbcc-parser.o dbcc-symbol.o \
         dbcc-code-position.o dbcc-type.o dbcc-statement.o \
-        dbcc-expr.o \
+        dbcc-expr.o dbcc-error.o dbcc-namespace.o \
 dsk/dsk-buffer.o dsk/dsk-common.o dsk/dsk-object.o dsk/dsk-error.o dsk/dsk-mem-pool.o dsk/dsk-dir.o dsk/dsk-file-util.o dsk/dsk-ascii.o dsk/dsk-rand.o dsk/dsk-rand-xorshift1024.o dsk/dsk-fd.o dsk/dsk-path.o
 	ar cru $@ $^
 
@@ -28,4 +28,12 @@ clean:
 
 
 missing-refs:
-	make 2>&1 | perl -ne 'print "$$1\n" if /^\s*"([^"]+)"/'
+	@make 2>&1 | perl -ne 'print "$$1\n" if /^\s*"([^"]+)"/' | sort -u
+
+dbcc-error.o: generated/dbcc-error-codes.inc
+
+generated/dbcc-error-codes.inc: generated scripts/mk-error-codes-inc dbcc-error.h
+	scripts/mk-error-codes-inc < dbcc-error.h > generated/dbcc-error-codes.inc
+
+generated:
+	mkdir -p generated

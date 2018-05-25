@@ -153,7 +153,7 @@ binary_op_name (DBCC_BinaryOperator op)
     case DBCC_BINARY_OPERATOR_SUB: return "sub";
     case DBCC_BINARY_OPERATOR_MUL: return "mul";
     case DBCC_BINARY_OPERATOR_DIV: return "div";
-    case DBCC_BINARY_OPERATOR_REMAINDER: return "remainder";
+    case DBCC_BINARY_OPERATOR_REM: return "remainder";
     case DBCC_BINARY_OPERATOR_LT: return "lt";
     case DBCC_BINARY_OPERATOR_LTEQ: return "lteq";
     case DBCC_BINARY_OPERATOR_GT: return "gt";
@@ -179,6 +179,9 @@ dump_type_json (DBCC_Type *type, void *handler_data)
   {
   case DBCC_TYPE_METATYPE_VOID:
     printf("\"void\"");
+    break;
+  case DBCC_TYPE_METATYPE_BOOL:
+    printf("\"bool\"");
     break;
   case DBCC_TYPE_METATYPE_INT:
     printf("\"%sint%u\"",
@@ -293,19 +296,54 @@ dump_type_json (DBCC_Type *type, void *handler_data)
     printf("], has_varargs: %s}",
            type->v_function.has_varargs ? "true" : "false");
     break;
+
+  case DBCC_TYPE_METATYPE_KR_FUNCTION:
+    printf("{\"metatype\":\"kr_function\",\"params\":[");
+    for (unsigned i = 0; i < type->v_function_kr.n_params; i++)
+      {
+        if (i > 0)
+          printf(",");
+        printf("\"%s\"", dbcc_symbol_get_string (type->v_function_kr.params[i]));
+      }
+    printf("}");
+    break;
   }
 }
 
 static void
-dump_constant_value (DBCC_Type *type, const void *value)
+dump_constant_value (DBCC_Type *type, DBCC_Constant *constant)
 {
   DskBuffer buffer = DSK_BUFFER_INIT;
   DBCC_Error *error = NULL;
-  if (!dbcc_type_value_to_json (type, value, &buffer, &error))
+  switch (constant->constant_type)
     {
-      fprintf(stderr, "dbcc_type_value_to_json: failed: %s\n", error->message);
-      exit(1);
+      case DBCC_CONSTANT_TYPE_VALUE:
+        dsk_buffer_append_string(&buffer, "[\"value\",");
+        if (!dbcc_type_value_to_json (type, constant->v_value.data, &buffer, &error))
+          {
+            fprintf(stderr, "dbcc_type_value_to_json: failed: %s\n", error->message);
+            exit(1);
+          }
+        dsk_buffer_append_string(&buffer, "]");
+        break;
+      case DBCC_CONSTANT_TYPE_LINK_ADDRESS:
+        dsk_buffer_printf(&buffer,
+                          "[\"link_address\",\"%s\"]",
+                          dbcc_symbol_get_string (constant->v_link_address.name));
+        break;
+      case DBCC_CONSTANT_TYPE_UNIT_ADDRESS:
+        dsk_buffer_printf(&buffer, "[\"unit_address\",\"%s\",%llx]",
+                          dbcc_symbol_get_string (constant->v_unit_address.name),
+                          (long long unsigned) constant->v_unit_address.address);
+        break;
+      case DBCC_CONSTANT_TYPE_LOCAL_ADDRESS:
+        dsk_buffer_printf(&buffer, "[\"local_address\",\"%p\"]", constant->v_local_address.local);
+        break;
+      case DBCC_CONSTANT_TYPE_OFFSET:
+        dsk_buffer_printf(&buffer, "[\"local_address\",\"%p\"]", constant->v_local_address.local);
+        break;
     }
+      
   for (DskBufferFragment *frag = buffer.first_frag;
        frag != NULL;
        frag = frag->next)
@@ -314,6 +352,65 @@ dump_constant_value (DBCC_Type *type, const void *value)
         fwrite (frag->buf + frag->buf_start, frag->buf_length, 1, stdout);
     }
   dsk_buffer_clear (&buffer);
+}
+
+static void dump_structured_initializer_json (DBCC_StructuredInitializer *init, void *handler_data);
+static void dump_expr_json (DBCC_Expr *expr, void *handler_data);
+
+static void
+dump_structured_initializer_piece_json (DBCC_StructuredInitializerPiece *piece, void *handler_data)
+{
+  printf("{\"designators\":[");
+  for (unsigned i = 0; i < piece->n_designators; i++)
+    {
+      if (i > 0)
+        printf(",");
+      switch (piece->designators[i].type)
+        {
+        case DBCC_DESIGNATOR_INDEX:
+          {
+            DBCC_Expr *index = piece->designators[i].v_index;
+            if (index->base.constant != NULL
+             && index->base.constant->constant_type == DBCC_CONSTANT_TYPE_VALUE)
+              {
+                int64_t value = dbcc_typed_value_get_int64 (index->base.value_type, index->base.constant->v_value.data);
+                printf("%lld", value);
+              }
+            else
+              {
+                dump_expr_json(index, handler_data);
+              }
+            break;
+          }
+        case DBCC_DESIGNATOR_MEMBER:
+          printf("\"%s\"", dbcc_symbol_get_string (piece->designators[i].v_member));
+          break;
+        }
+    }
+  printf("],");
+  if (piece->is_expr)
+    {
+      printf("\"expr\":");
+      dump_expr_json(piece->v_expr, handler_data);
+    }
+  else
+    {
+      printf("\"init\":");
+      dump_structured_initializer_json (&piece->v_structured_initializer, handler_data);
+    }
+  printf("}");
+}
+static void
+dump_structured_initializer_json (DBCC_StructuredInitializer *init, void *handler_data)
+{
+  printf("[");
+  for (unsigned i = 0; i < init->n_pieces; i++)
+    {
+      if (i > 0)
+        printf(",");
+      dump_structured_initializer_piece_json (init->pieces + i, handler_data);
+    }
+  printf("]");
 }
 
 static void
@@ -339,18 +436,83 @@ dump_expr_json (DBCC_Expr *expr, void *handler_data)
       printf("{\"type\":\"ternary\",\"condition\":");
       dump_expr_json (expr->v_ternary.condition, handler_data);
       printf(",\"true_expr\":");
-      dump_expr_json (expr->v_ternary.a, handler_data);
+      dump_expr_json (expr->v_ternary.true_value, handler_data);
       printf(",\"false_expr\":");
-      dump_expr_json (expr->v_ternary.b, handler_data);
+      dump_expr_json (expr->v_ternary.false_value, handler_data);
       printf("}");
       break;
     case DBCC_EXPR_TYPE_CONSTANT:
-      printf("{\"type\":\"ternary\",\"value_type\":");
+      printf("{\"type\":\"constant\",\"value_type\":");
       dump_type_json (expr->base.value_type, handler_data);
-      printf(",\"constant_value\":");
-      dump_constant_value (expr->base.value_type, expr->base.constant_value);
+      printf(",\"constant\":");
+      dump_constant_value (expr->base.value_type, expr->base.constant);
       printf("}");
       break;
+    case DBCC_EXPR_TYPE_INPLACE_UNARY_OP:
+      printf("{\"type\":\"inplace_unary\",\"op\":");
+      printf("\"%s\", \"inout\":", dbcc_inplace_unary_operator_name(expr->v_inplace_unary.op));
+      dump_expr_json (expr->v_inplace_unary.inout, handler_data);
+      printf("}");
+      break;
+    case DBCC_EXPR_TYPE_INPLACE_BINARY_OP:
+      printf("{\"type\":\"inplace_binary\",\"op\":");
+      printf("\"%s\", \"inout\":", dbcc_inplace_binary_operator_name(expr->v_inplace_binary.op));
+      dump_expr_json (expr->v_inplace_binary.inout, handler_data);
+      printf(",\"b\":");
+      dump_expr_json (expr->v_inplace_binary.b, handler_data);
+      printf("}");
+      break;
+    case DBCC_EXPR_TYPE_CALL:
+      printf("{\"type\":\"call\",\"function\":");
+      dump_expr_json (expr->v_call.head, handler_data);
+      printf(",\"params\":[");
+      for (unsigned i = 0; i < expr->v_call.n_args; i++)
+        {
+          if (i > 0)
+            printf(",");
+          dump_expr_json(expr->v_call.args[i], handler_data);
+        }
+      printf("]}");
+      break;
+    case DBCC_EXPR_TYPE_CAST:
+      printf("{\"type\":\"cast\",\"target_type\":");
+      dump_type_json (expr->base.value_type, handler_data);
+      printf(",\"sub_expr\":");
+      dump_expr_json (expr->v_cast.pre_cast_expr, handler_data);
+      printf("}");
+      break;
+    case DBCC_EXPR_TYPE_ACCESS:
+      printf("{\"type\":\"access\",\"op\":\"%s\",\"object\":",
+             expr->v_access.is_pointer ? "->" : ".");
+      dump_expr_json (expr->v_access.object, handler_data);
+      printf(",\"member\":\"%s\"}", dbcc_symbol_get_string (expr->v_access.name));
+      break;
+    case DBCC_EXPR_TYPE_IDENTIFIER:
+      printf("{\"type\":\"identifier\",\"name\":\"%s\"", dbcc_symbol_get_string (expr->v_identifier.name));
+      // OTHER STUFF!
+      printf("}");
+      break;
+    case DBCC_EXPR_TYPE_STRUCTURED_INITIALIZER:
+      printf("{\"type\":\"structured_initializer\",\"value\":");
+      dump_structured_initializer_json(&expr->v_structured_initializer.initializer, handler_data);
+      printf(",\"flattened\":[");
+      for (unsigned i = 0; i < expr->v_structured_initializer.n_flat_pieces; i++)
+        {
+          if (i > 0)
+            printf(",");
+          printf("{\"offset\":%u,\"length\":%u",
+                 (unsigned)expr->v_structured_initializer.flat_pieces[i].offset,
+                 (unsigned)expr->v_structured_initializer.flat_pieces[i].length);
+          if (expr->v_structured_initializer.flat_pieces[i].piece_expr != NULL)
+            {
+              printf(",\"expr\":");
+              dump_expr_json (expr->v_structured_initializer.flat_pieces[i].piece_expr, handler_data);
+            }
+          printf("}");
+        }
+      printf("]}");
+      break;
+#if 0
     case DBCC_EXPR_TYPE_SUBSCRIPT:
       printf("{\"type\":\"subscript\",\"container\":");
       dump_expr_json (expr->v_subscript.ptr, handler_data);
@@ -358,6 +520,7 @@ dump_expr_json (DBCC_Expr *expr, void *handler_data)
       dump_expr_json (expr->v_subscript.index, handler_data);
       printf("}");
       break;
+#endif
     }
 }
 

@@ -1,0 +1,8 @@
+#! /usr/bin/perl
+
+my $state = 0;
+while (<STDIN>) {
+  if (/BEGIN ERROR CODES/) { die unless $state == 0; $state = 1; }
+  if (/END ERROR CODES/) { die unless $state == 1; $state = 2; }
+  if ($state == 1 && /DBCC_ERROR_([A-Z_0-9a-z]+)/) { print "CODE($1)\n" }
+}

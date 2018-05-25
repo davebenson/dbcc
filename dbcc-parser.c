@@ -232,7 +232,7 @@ dbcc_parser_new             (DBCC_Parser_NewOptions *new_options)
   rv->handlers.handle_destroy = new_options->handle_destroy;
   rv->handler_data = new_options->handler_data;
   dsk_buffer_init (&rv->buffer);
-  rv->globals = dbcc_namespace_new_global ();
+  rv->globals = dbcc_namespace_new_global (new_options->target_env);
   rv->context = p_context_new (rv->globals);
   rv->lemon_parser = DBCC_Lemon_ParserAlloc(malloc);
   rv->n_include_dirs = 0;
@@ -2755,12 +2755,12 @@ dbcc_parser_parse_file      (DBCC_Parser   *parser,
                                 parser->handlers.handle_error (error, parser->handler_data);
                                 return false;
                               }
-                            size_t sizeof_float_type;
+                            DBCC_FloatType float_type;
                             DBCC_Error *error = NULL;
                             if (!dbcc_common_floating_point_get_info(parser->target_environment,
                                                             cpp_tokens[at].length,
                                                             cpp_tokens[at].str,
-                                                            &sizeof_float_type,
+                                                            &float_type,
                                                             &error))
                               {
                                 dbcc_error_add_code_position (error, cpp_tokens[at].code_position);
@@ -2770,7 +2770,7 @@ dbcc_parser_parse_file      (DBCC_Parser   *parser,
                             P_Token t = {
                               .code_position = cpp_tokens[at].code_position,
                               .token_type = P_TOKEN_F_CONSTANT,
-                              .v_f_constant.sizeof_value = sizeof_float_type,
+                              .v_f_constant.float_type = float_type,
                               .v_f_constant.v_long_double = v,
                             };
                             EMIT_PTOKEN_TO_PARSER(t);
@@ -2847,7 +2847,7 @@ dbcc_parser_parse_file      (DBCC_Parser   *parser,
                                 case DBCC_NAMESPACE_ENTRY_ENUM_VALUE:
                                   pt = (P_Token) {.code_position = cpp_tokens[at].code_position,
                                                   .token_type = P_TOKEN_ENUMERATION_CONSTANT,
-                                                  .v_enum_value = ns_entry.v_enum_value};
+                                                  .v_enum_value = ns_entry.v_enum_value.enum_value};
                                   break;
                                 default:
                                   assert(0);

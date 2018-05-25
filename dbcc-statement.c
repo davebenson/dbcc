@@ -245,7 +245,8 @@ switch_map_construct_data_process (SwitchMapConstructData *construct_data,
 
     case DBCC_STATEMENT_CASE:
       // Ensure that expr is constant, by looking at its value.
-      if (statement->v_case.value_expr->base.constant_value != NULL)
+      if (statement->v_case.value_expr->base.constant == NULL
+       || statement->v_case.value_expr->base.constant->constant_type != DBCC_CONSTANT_TYPE_VALUE)
         {
           construct_data->error = dbcc_error_new (DBCC_ERROR_CASE_EXPR_NONCONSTANT,
                                                   "case-statement value is not a constant");
@@ -256,8 +257,8 @@ switch_map_construct_data_process (SwitchMapConstructData *construct_data,
 
       // Add value into switch-table.
       DBCC_Expr *ce = statement->v_case.value_expr;
-      uint64_t v = dbcc_type_value_to_uint64 (ce->base.value_type,
-                                              ce->base.constant_value);
+      uint64_t v = dbcc_typed_value_get_int64 (ce->base.value_type,
+                                               ce->base.constant->v_value.data);
       ValueCasePair *pair = malloc (sizeof (ValueCasePair));
       ValueCasePair *conflict;
       pair->value = v;
@@ -319,7 +320,7 @@ dbcc_statement_new_switch         (DBCC_Expr          *expr,
 {
   if (expr != NULL
    && expr->base.value_type != NULL
-   && !dbcc_type_is_integer_type (expr->base.value_type))
+   && !dbcc_type_is_integer (expr->base.value_type))
     {
       *error = dbcc_error_new (DBCC_ERROR_EXPR_NOT_CONDITION,
                                "expression type is not an integer-type/enum in case-statement condition");

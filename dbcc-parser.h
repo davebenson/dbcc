@@ -5,6 +5,8 @@ typedef struct DBCC_Parser DBCC_Parser;
 typedef struct DBCC_Parser_NewOptions DBCC_Parser_NewOptions;
 struct DBCC_Parser_NewOptions
 {
+
+  DBCC_TargetEnvironment *target_env;
   void (*handle_statement)(DBCC_Statement *stmt,
                            void           *handler_data);
 

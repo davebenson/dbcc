@@ -4,6 +4,7 @@ typedef struct DBCC_ErrorNode DBCC_ErrorNode;
 
 typedef enum
 {
+  /* BEGIN ERROR CODES */
   /* Preprocessing / lexing/tokenizing Errors */
   DBCC_ERROR_UNTERMINATED_MULTILINE_COMMENT,
   DBCC_ERROR_BAD_NUMBER_CONSTANT,
@@ -78,6 +79,7 @@ typedef enum
   DBCC_ERROR_LOGICAL_OPERATOR_REQUIRES_SCALARS,
   DBCC_ERROR_NONINTEGER_BITWISE_OP,
   DBCC_ERROR_NONINTEGER_DESIGNATOR,
+  DBCC_ERROR_CANNOT_INFER_TYPE,
 
   /* semantic constraints */
   DBCC_ERROR_CASE_DUPLICATE,
@@ -104,6 +106,8 @@ typedef enum
   DBCC_ERROR_CASE_EXPR_NONCONSTANT,
 
   /* type-checking errors */
+
+  /* END ERROR CODES */
 } DBCC_ErrorCode;
 
 const char *dbcc_error_code_name (DBCC_ErrorCode code);

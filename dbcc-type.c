@@ -71,12 +71,42 @@ dbcc_type_unref (DBCC_Type *type)
             }
           free (type->v_function.params);
           break;
+        case DBCC_TYPE_METATYPE_KR_FUNCTION:
+          for (unsigned i = 0; i < type->v_function_kr.n_params; i++)
+            dbcc_symbol_unref (type->v_function_kr.params[i]);
+          free (type->v_function_kr.params);
+          break;
         }
       if (type->base.name != NULL)
         dbcc_symbol_unref (type->base.name);
       free (type);
     }
 }
+
+const char * dbcc_type_metatype_name (DBCC_Type_Metatype metatype)
+{
+  switch (metatype)
+    {
+    #define CASE(shortname) case DBCC_TYPE_METATYPE_##shortname: return #shortname;
+    CASE(VOID)
+    CASE(BOOL)
+    CASE(INT)
+    CASE(FLOAT)
+    CASE(ARRAY)
+    CASE(VARIABLE_LENGTH_ARRAY)
+    CASE(STRUCT)
+    CASE(UNION)
+    CASE(ENUM)
+    CASE(POINTER)
+    CASE(TYPEDEF)
+    CASE(QUALIFIED)
+    CASE(FUNCTION)
+    CASE(KR_FUNCTION)
+    #undef CASE
+    }
+  return NULL;
+}
+
 static inline DBCC_Type *
 new_type (DBCC_Type_Metatype t)
 {
@@ -960,7 +990,7 @@ dbcc_type_value_to_json(DBCC_Type   *type,
           void *mv = (char *) value + m->offset;
           if (m->is_bitfield)
             {
-              uint64_t v = dbcc_type_value_to_uint64 (m->type, mv);
+              uint64_t v = dbcc_typed_value_get_int64 (m->type, mv);
               v >>= m->bit_offset;
               v &= (1ULL << m->bit_length) - 1;
               if (is_signed_int_type (mt))
@@ -1017,7 +1047,7 @@ dbcc_type_value_to_json(DBCC_Type   *type,
 
     case DBCC_TYPE_METATYPE_ENUM:
       {
-        int64_t v = dbcc_type_value_to_uint64 (type, value);
+        int64_t v = dbcc_typed_value_get_int64 (type, value);
         render_enum_value_as_json(type, v, out);
         return true;
       }
@@ -1109,3 +1139,756 @@ dbcc_type_is_complex (DBCC_Type *type)
     }
 }
 
+DBCC_Type *dbcc_type_pointer_dereference (DBCC_Type *type)
+{
+  type = dbcc_type_dequalify(type);
+  switch (type->metatype)
+    {
+    case DBCC_TYPE_METATYPE_POINTER:
+      return type->v_pointer.target_type;
+    //TODO: arrays?
+    default:
+      return NULL;
+    }
+}
+bool dbcc_type_is_incomplete (DBCC_Type *type)
+{
+  switch (type->metatype)
+    {
+    case DBCC_TYPE_METATYPE_VOID:
+      return true;
+    case DBCC_TYPE_METATYPE_STRUCT:
+      return type->v_struct.incomplete;
+    case DBCC_TYPE_METATYPE_UNION:
+      return type->v_union.incomplete;
+    default:
+      return false;
+    }
+}
+DBCC_TypeQualifier dbcc_type_get_qualifiers (DBCC_Type *type)
+{
+  return type->metatype == DBCC_TYPE_METATYPE_QUALIFIED
+       ? type->v_qualified.qualifiers
+       : 0;
+}
+
+/* see 6.2.7 Compatible type and composite type.
+ * Note that types MUST be compatible to be composited.
+ *
+ * Also worth noting:  much of this section is devoted to
+ * types in different translation units.
+ *
+ * Mostly, this is the notion of binary-compatible,
+ * ie, what can be linked together.
+ */
+bool
+dbcc_types_compatible (DBCC_Type *a, DBCC_Type *b);
+DBCC_Type *
+dbcc_types_make_composite (DBCC_Type *a, DBCC_Type *b);
+
+bool
+dbcc_type_implicitly_convertable (DBCC_Type *dst_type,
+                                  DBCC_Type *src_type);
+
+// Can the type be used in a condition expression?
+// (as used in for-loops, if-statements, and do-while-loops)
+bool   dbcc_type_is_scalar (DBCC_Type *type)
+{
+  switch (dbcc_type_dequalify (type)->metatype)
+    {
+    case DBCC_TYPE_METATYPE_BOOL:
+    case DBCC_TYPE_METATYPE_INT:
+    case DBCC_TYPE_METATYPE_FLOAT:
+    case DBCC_TYPE_METATYPE_ENUM:
+    case DBCC_TYPE_METATYPE_POINTER:
+      return true;
+    default:
+      return false;
+    }
+}
+
+// Is enum or int?   This is the condition required by switch-statements.
+bool   dbcc_type_is_integer (DBCC_Type *type)
+{
+  switch (dbcc_type_dequalify (type)->metatype)
+    {
+    case DBCC_TYPE_METATYPE_BOOL:
+    case DBCC_TYPE_METATYPE_INT:
+    case DBCC_TYPE_METATYPE_ENUM:
+      return true;
+    default:
+      return false;
+    }
+}
+
+bool   dbcc_type_is_const   (DBCC_Type *type)
+{
+  return (dbcc_type_get_qualifiers (type) & DBCC_TYPE_QUALIFIER_CONST) != 0;
+}
+bool   dbcc_type_is_unsigned (DBCC_Type *type)
+{
+  switch (type->metatype)
+    {
+    case DBCC_TYPE_METATYPE_BOOL:
+      return true;
+    case DBCC_TYPE_METATYPE_INT:
+      return !type->v_int.is_signed;
+    case DBCC_TYPE_METATYPE_ENUM:
+      return true;
+    default:
+      return false;
+    }
+}
+
+bool   dbcc_type_is_arithmetic (DBCC_Type *type)
+{
+  switch (type->metatype)
+    {
+    case DBCC_TYPE_METATYPE_BOOL:
+    case DBCC_TYPE_METATYPE_INT:
+    case DBCC_TYPE_METATYPE_ENUM:
+    case DBCC_TYPE_METATYPE_FLOAT:
+      return true;
+    default:
+      return false;
+    }
+}
+
+bool dbcc_type_is_floating_point (DBCC_Type *type)
+{
+  return dbcc_type_dequalify (type)->metatype == DBCC_TYPE_METATYPE_FLOAT;
+}
+
+// A qualified- or unqualified-pointer to any type.
+bool dbcc_type_is_pointer (DBCC_Type *type)
+{
+  type = dbcc_type_dequalify (type);
+  return type->metatype == DBCC_TYPE_METATYPE_POINTER;
+}
+
+// an integer type (int or enum), or non-complex floating-type.
+bool dbcc_type_is_real (DBCC_Type *type)
+{
+  type = dbcc_type_dequalify (type);
+  switch (type->metatype)
+    {
+    case DBCC_TYPE_METATYPE_INT:
+    case DBCC_TYPE_METATYPE_BOOL:
+    case DBCC_TYPE_METATYPE_ENUM:
+      return true;
+    case DBCC_TYPE_METATYPE_FLOAT:
+      return type->v_float.float_type < 3;
+    default:
+      return false;
+    }
+}
+
+// This will do sign-extension as needed.
+// Type must be INT or ENUM.
+uint64_t   dbcc_typed_value_get_int64 (DBCC_Type *type,
+                                       const void *value)
+{
+  type = dbcc_type_dequalify (type);
+  if (type->metatype == DBCC_TYPE_METATYPE_FLOAT)
+    {
+      switch (type->v_float.float_type)
+        {
+        case DBCC_FLOAT_TYPE_FLOAT:
+          return (uint64_t) (int64_t) (* (const float *) value);
+        case DBCC_FLOAT_TYPE_DOUBLE:
+          return (uint64_t) (int64_t) (* (const double *) value);
+        case DBCC_FLOAT_TYPE_LONG_DOUBLE:
+          return (uint64_t) (int64_t) (* (const long double *) value);
+        default:
+          return 0;                     // TODO
+        }
+    }
+  else if (dbcc_type_is_unsigned (type))
+    {
+      switch (type->base.sizeof_instance)
+        {
+        case 1:
+          return (* (const uint8_t *) value);
+        case 2:
+          return (* (const uint16_t *) value);
+        case 4:
+          return (* (const uint32_t *) value);
+        case 8:
+          return (* (const uint64_t *) value);
+        default:
+          return 0;                     // TODO
+        }
+    }
+  else
+    {
+      switch (type->base.sizeof_instance)
+        {
+        case 1:
+          return (int64_t) (* (const int8_t *) value);
+        case 2:
+          return (int64_t) (* (const int16_t *) value);
+        case 4:
+          return (int64_t) (* (const int32_t *) value);
+        case 8:
+          return (int64_t) (* (const int64_t *) value);
+        default:
+          return 0;                     // TODO
+        }
+    }
+}
+      
+void       dbcc_typed_value_set_int64(DBCC_Type  *type,
+                                      const void *out,
+                                      int64_t     v);
+void       dbcc_typed_value_set_long_double (DBCC_Type *type,
+                                      const void *out,
+                                      long double v);
+
+void *dbcc_typed_value_alloc_raw (DBCC_Type *type)
+{
+  return malloc (type->base.sizeof_instance);
+}
+void *dbcc_typed_value_alloc0 (DBCC_Type *type)
+{
+  return calloc (type->base.sizeof_instance, 1);
+}
+void dbcc_typed_value_add (DBCC_Type *type,
+                           void *out,
+                           const void *a,
+                           const void *b)
+{
+  type = dbcc_type_dequalify(type);
+  if (type->metatype == DBCC_TYPE_METATYPE_INT
+   || type->metatype == DBCC_TYPE_METATYPE_ENUM)
+    {
+      switch (type->base.sizeof_instance)
+        {
+        case 1:
+          *(uint8_t*)out = *(const uint8_t *) a + *(const uint8_t *) b;
+          break;
+        case 2:
+          *(uint16_t*)out = *(const uint16_t *) a + *(const uint16_t *) b;
+          break;
+        case 4:
+          *(uint32_t*)out = *(const uint32_t *) a + *(const uint32_t *) b;
+          break;
+        case 8:
+          *(uint64_t*)out = *(const uint64_t *) a + *(const uint64_t *) b;
+          break;
+        default:
+          assert(0);
+        }
+    }
+  else if (type->metatype == DBCC_TYPE_METATYPE_FLOAT)
+    {
+      switch (type->v_float.float_type)
+        {
+        case DBCC_FLOAT_TYPE_FLOAT:
+        case DBCC_FLOAT_TYPE_IMAGINARY_FLOAT:
+          *(float*)out = *(const float *) a + *(const float *) b;
+          break;
+        case DBCC_FLOAT_TYPE_DOUBLE:
+        case DBCC_FLOAT_TYPE_IMAGINARY_DOUBLE:
+          *(double*)out = *(const double *) a + *(const double *) b;
+          break;
+        case DBCC_FLOAT_TYPE_LONG_DOUBLE:
+        case DBCC_FLOAT_TYPE_IMAGINARY_LONG_DOUBLE:
+          *(long double*)out = *(const long double *) a + *(const long double *) b;
+          break;
+        case DBCC_FLOAT_TYPE_COMPLEX_FLOAT:
+          ((float*)out)[0] = ((const float *) a)[0] + ((const float *) b)[0];
+          ((float*)out)[1] = ((const float *) a)[1] + ((const float *) b)[1];
+          break;
+        case DBCC_FLOAT_TYPE_COMPLEX_DOUBLE:
+          ((double*)out)[0] = ((const double *) a)[0] + ((const double *) b)[0];
+          ((double*)out)[1] = ((const double *) a)[1] + ((const double *) b)[1];
+          break;
+        case DBCC_FLOAT_TYPE_COMPLEX_LONG_DOUBLE:
+          ((long double*)out)[0] = ((const long double *) a)[0] + ((const long double *) b)[0];
+          ((long double*)out)[1] = ((const long double *) a)[1] + ((const long double *) b)[1];
+          break;
+        default:
+          assert(0);
+        }
+    }
+  else
+    {
+      assert(0);
+    }
+}
+
+void dbcc_typed_value_subtract (DBCC_Type *type,
+                           void *out,
+                           const void *a,
+                           const void *b)
+{
+  type = dbcc_type_dequalify(type);
+  if (type->metatype == DBCC_TYPE_METATYPE_INT
+   || type->metatype == DBCC_TYPE_METATYPE_ENUM)
+    {
+      switch (type->base.sizeof_instance)
+        {
+        case 1:
+          *(uint8_t*)out = *(const uint8_t *) a - *(const uint8_t *) b;
+          break;
+        case 2:
+          *(uint16_t*)out = *(const uint16_t *) a - *(const uint16_t *) b;
+          break;
+        case 4:
+          *(uint32_t*)out = *(const uint32_t *) a - *(const uint32_t *) b;
+          break;
+        case 8:
+          *(uint64_t*)out = *(const uint64_t *) a - *(const uint64_t *) b;
+          break;
+        default:
+          assert(0);
+        }
+    }
+  else if (type->metatype == DBCC_TYPE_METATYPE_FLOAT)
+    {
+      switch (type->v_float.float_type)
+        {
+        case DBCC_FLOAT_TYPE_FLOAT:
+        case DBCC_FLOAT_TYPE_IMAGINARY_FLOAT:
+          *(float*)out = *(const float *) a - *(const float *) b;
+          break;
+        case DBCC_FLOAT_TYPE_DOUBLE:
+        case DBCC_FLOAT_TYPE_IMAGINARY_DOUBLE:
+          *(double*)out = *(const double *) a - *(const double *) b;
+          break;
+        case DBCC_FLOAT_TYPE_LONG_DOUBLE:
+        case DBCC_FLOAT_TYPE_IMAGINARY_LONG_DOUBLE:
+          *(long double*)out = *(const long double *) a - *(const long double *) b;
+          break;
+        case DBCC_FLOAT_TYPE_COMPLEX_FLOAT:
+          ((float*)out)[0] = ((const float *) a)[0] - ((const float *) b)[0];
+          ((float*)out)[1] = ((const float *) a)[1] - ((const float *) b)[1];
+          break;
+        case DBCC_FLOAT_TYPE_COMPLEX_DOUBLE:
+          ((double*)out)[0] = ((const double *) a)[0] - ((const double *) b)[0];
+          ((double*)out)[1] = ((const double *) a)[1] - ((const double *) b)[1];
+          break;
+        case DBCC_FLOAT_TYPE_COMPLEX_LONG_DOUBLE:
+          ((long double*)out)[0] = ((const long double *) a)[0] - ((const long double *) b)[0];
+          ((long double*)out)[1] = ((const long double *) a)[1] - ((const long double *) b)[1];
+          break;
+        default:
+          assert(0);
+        }
+    }
+  else
+    {
+      assert(0);
+    }
+}
+void dbcc_typed_value_multiply (DBCC_Type *type,
+                                void *out,
+                                const void *a,
+                                const void *b)
+{
+  type = dbcc_type_dequalify(type);
+  if (type->metatype == DBCC_TYPE_METATYPE_INT
+   || type->metatype == DBCC_TYPE_METATYPE_ENUM)
+    {
+      if (dbcc_type_is_unsigned (type))
+        switch (type->base.sizeof_instance)
+          {
+          case 1:
+            *(uint8_t*)out = *(const uint8_t *) a * *(const uint8_t *) b;
+            break;
+          case 2:
+            *(uint16_t*)out = *(const uint16_t *) a * *(const uint16_t *) b;
+            break;
+          case 4:
+            *(uint32_t*)out = *(const uint32_t *) a * *(const uint32_t *) b;
+            break;
+          case 8:
+            *(uint64_t*)out = *(const uint64_t *) a * *(const uint64_t *) b;
+            break;
+          default:
+            assert(0);
+          }
+      else
+        switch (type->base.sizeof_instance)
+          {
+          case 1:
+            *(int8_t*)out = *(const int8_t *) a * *(const int8_t *) b;
+            break;
+          case 2:
+            *(int16_t*)out = *(const int16_t *) a * *(const int16_t *) b;
+            break;
+          case 4:
+            *(int32_t*)out = *(const int32_t *) a * *(const int32_t *) b;
+            break;
+          case 8:
+            *(int64_t*)out = *(const int64_t *) a * *(const int64_t *) b;
+            break;
+          default:
+            assert(0);
+          }
+    }
+  else if (type->metatype == DBCC_TYPE_METATYPE_FLOAT)
+    {
+      switch (type->v_float.float_type)
+        {
+        case DBCC_FLOAT_TYPE_FLOAT:
+        case DBCC_FLOAT_TYPE_IMAGINARY_FLOAT:
+          *(float*)out = *(const float *) a * *(const float *) b;
+          break;
+        case DBCC_FLOAT_TYPE_DOUBLE:
+        case DBCC_FLOAT_TYPE_IMAGINARY_DOUBLE:
+          *(double*)out = *(const double *) a * *(const double *) b;
+          break;
+        case DBCC_FLOAT_TYPE_LONG_DOUBLE:
+        case DBCC_FLOAT_TYPE_IMAGINARY_LONG_DOUBLE:
+          *(long double*)out = *(const long double *) a * *(const long double *) b;
+          break;
+        case DBCC_FLOAT_TYPE_COMPLEX_FLOAT:
+          ((float*)out)[0] = ((const float *) a)[0] * ((const float *) b)[0];
+          ((float*)out)[1] = ((const float *) a)[1] * ((const float *) b)[1];
+          break;
+        case DBCC_FLOAT_TYPE_COMPLEX_DOUBLE:
+          ((double*)out)[0] = ((const double *) a)[0] * ((const double *) b)[0];
+          ((double*)out)[1] = ((const double *) a)[1] * ((const double *) b)[1];
+          break;
+        case DBCC_FLOAT_TYPE_COMPLEX_LONG_DOUBLE:
+          ((long double*)out)[0] = ((const long double *) a)[0] * ((const long double *) b)[0];
+          ((long double*)out)[1] = ((const long double *) a)[1] * ((const long double *) b)[1];
+          break;
+        default:
+          assert(0);
+        }
+    }
+  else
+    {
+      assert(0);
+    }
+}
+
+#define DO_COMPLEX_FLOAT_DIVIDE(float, out, a, b)                     \
+    do {                                                              \
+            float ar = ((const float *) a)[0];                        \
+            float ai = ((const float *) a)[1];                        \
+            float br = ((const float *) b)[0];                        \
+            float bi = ((const float *) b)[1];                        \
+            float br_mag = br < 0 ? -br : br;                         \
+            float bi_mag = bi < 0 ? -bi : bi;                         \
+            if (br_mag >= bi_mag)                                     \
+              {                                                       \
+                float bi_over_br = bi / br;                           \
+                float denom = br + bi * bi_over_br;                   \
+                ((float *)out)[0] = (ar + ai * bi_over_br) / denom;   \
+                ((float *)out)[1] = (ai + ar * bi_over_br) / denom;   \
+              }                                                       \
+            else                                                      \
+              {                                                       \
+                float br_over_bi = br / bi;                           \
+                float denom = br * br_over_bi + bi;                   \
+                ((float *)out)[0] = (ar * br_over_bi + ai) / denom;   \
+                ((float *)out)[1] = (ai * br_over_bi - ar) / denom;   \
+              }                                                       \
+          }   while(0)
+bool dbcc_typed_value_divide (DBCC_Type *type,
+                              void *out,
+                              const void *a,
+                              const void *b)
+{
+  type = dbcc_type_dequalify(type);
+  if (type->metatype == DBCC_TYPE_METATYPE_INT
+   || type->metatype == DBCC_TYPE_METATYPE_ENUM)
+    {
+      if (dbcc_type_is_unsigned (type))
+        switch (type->base.sizeof_instance)
+          {
+          case 1:
+            *(uint8_t*)out = *(const uint8_t *) a / *(const uint8_t *) b;
+            break;
+          case 2:
+            *(uint16_t*)out = *(const uint16_t *) a / *(const uint16_t *) b;
+            break;
+          case 4:
+            *(uint32_t*)out = *(const uint32_t *) a / *(const uint32_t *) b;
+            break;
+          case 8:
+            *(uint64_t*)out = *(const uint64_t *) a / *(const uint64_t *) b;
+            break;
+          default:
+            assert(0);
+          }
+      else
+        switch (type->base.sizeof_instance)
+          {
+          case 1:
+            *(int8_t*)out = *(const int8_t *) a / *(const int8_t *) b;
+            break;
+          case 2:
+            *(int16_t*)out = *(const int16_t *) a / *(const int16_t *) b;
+            break;
+          case 4:
+            *(int32_t*)out = *(const int32_t *) a / *(const int32_t *) b;
+            break;
+          case 8:
+            *(int64_t*)out = *(const int64_t *) a / *(const int64_t *) b;
+            break;
+          default:
+            assert(0);
+          }
+      return true;
+    }
+  else if (type->metatype == DBCC_TYPE_METATYPE_FLOAT)
+    {
+      switch (type->v_float.float_type)
+        {
+        case DBCC_FLOAT_TYPE_FLOAT:
+          *(float*)out = *(const float *) a / *(const float *) b;
+          break;
+        case DBCC_FLOAT_TYPE_DOUBLE:
+          *(double*)out = *(const double *) a / *(const double *) b;
+          break;
+        case DBCC_FLOAT_TYPE_LONG_DOUBLE:
+          *(long double*)out = *(const long double *) a / *(const long double *) b;
+          break;
+        case DBCC_FLOAT_TYPE_IMAGINARY_LONG_DOUBLE:
+        case DBCC_FLOAT_TYPE_IMAGINARY_DOUBLE:
+        case DBCC_FLOAT_TYPE_IMAGINARY_FLOAT:
+          assert(0);
+          break;
+        case DBCC_FLOAT_TYPE_COMPLEX_FLOAT:
+          DO_COMPLEX_FLOAT_DIVIDE(float, out, a, b);
+          return true;
+        case DBCC_FLOAT_TYPE_COMPLEX_DOUBLE:
+          DO_COMPLEX_FLOAT_DIVIDE(double, out, a, b);
+          return true;
+        case DBCC_FLOAT_TYPE_COMPLEX_LONG_DOUBLE:
+          DO_COMPLEX_FLOAT_DIVIDE(long double, out, a, b);
+          return true;
+        default:
+          assert(0);
+        }
+      return true;
+    }
+  else
+    {
+      assert(0);
+      return false;
+    }
+}
+
+bool
+dbcc_typed_value_remainder (DBCC_Type *type,
+                           void *out,
+                           const void *a,
+                           const void *b)
+{
+  if (!dbcc_type_is_integer (type))
+    return false;
+  if (dbcc_type_is_unsigned (type))
+    {
+      switch (type->base.sizeof_instance)
+        {
+        case 1: * (uint8_t *) out = *(uint8_t*)a % *(uint8_t*)b; return true;
+        case 2: * (uint16_t *) out = *(uint16_t*)a % *(uint16_t*)b; return true;
+        case 4: * (uint32_t *) out = *(uint32_t*)a % *(uint32_t*)b; return true;
+        case 8: * (uint64_t *) out = *(uint64_t*)a % *(uint64_t*)b; return true;
+        default: assert(0); return false;
+        }
+    }
+  else
+    {
+      switch (type->base.sizeof_instance)
+        {
+        case 1: * (int8_t *) out = *(int8_t*)a % *(int8_t*)b; return true;
+        case 2: * (int16_t *) out = *(int16_t*)a % *(int16_t*)b; return true;
+        case 4: * (int32_t *) out = *(int32_t*)a % *(int32_t*)b; return true;
+        case 8: * (int64_t *) out = *(int64_t*)a % *(int64_t*)b; return true;
+        default: assert(0); return false;
+        }
+    }
+}
+// type must be integer (or enum- only size/signedness is used) for shifting
+bool dbcc_typed_value_shift_left (DBCC_Type *type,
+                           void *out,
+                           const void *a,
+                           const void *b)
+{
+  if (!dbcc_type_is_integer (type))
+    return false;
+  if (dbcc_type_is_unsigned (type))
+    {
+      switch (type->base.sizeof_instance)
+        {
+        case 1: * (uint8_t *) out = *(uint8_t*)a << *(uint8_t*)b; return true;
+        case 2: * (uint16_t *) out = *(uint16_t*)a << *(uint16_t*)b; return true;
+        case 4: * (uint32_t *) out = *(uint32_t*)a << *(uint32_t*)b; return true;
+        case 8: * (uint64_t *) out = *(uint64_t*)a << *(uint64_t*)b; return true;
+        default: assert(0); return false;
+        }
+    }
+  else
+    {
+      switch (type->base.sizeof_instance)
+        {
+        case 1: * (int8_t *) out = *(int8_t*)a << *(int8_t*)b; return true;
+        case 2: * (int16_t *) out = *(int16_t*)a << *(int16_t*)b; return true;
+        case 4: * (int32_t *) out = *(int32_t*)a << *(int32_t*)b; return true;
+        case 8: * (int64_t *) out = *(int64_t*)a << *(int64_t*)b; return true;
+        default: assert(0); return false;
+        }
+    }
+}
+bool dbcc_typed_value_shift_right (DBCC_Type *type,
+                           void *out,
+                           const void *a,
+                           const void *b)
+{
+  if (!dbcc_type_is_integer (type))
+    return false;
+  if (dbcc_type_is_unsigned (type))
+    {
+      switch (type->base.sizeof_instance)
+        {
+        case 1: * (uint8_t *) out = *(uint8_t*)a >> *(uint8_t*)b; return true;
+        case 2: * (uint16_t *) out = *(uint16_t*)a >> *(uint16_t*)b; return true;
+        case 4: * (uint32_t *) out = *(uint32_t*)a >> *(uint32_t*)b; return true;
+        case 8: * (uint64_t *) out = *(uint64_t*)a >> *(uint64_t*)b; return true;
+        default: assert(0); return false;
+        }
+    }
+  else
+    {
+      switch (type->base.sizeof_instance)
+        {
+        case 1: * (int8_t *) out = *(int8_t*)a >> *(int8_t*)b; return true;
+        case 2: * (int16_t *) out = *(int16_t*)a >> *(int16_t*)b; return true;
+        case 4: * (int32_t *) out = *(int32_t*)a >> *(int32_t*)b; return true;
+        case 8: * (int64_t *) out = *(int64_t*)a >> *(int64_t*)b; return true;
+        default: assert(0); return false;
+        }
+    }
+}
+
+bool dbcc_typed_value_bitwise_and (DBCC_Type *type,
+                                   void *out,
+                                   const void *a,
+                                   const void *b)
+{
+  uint8_t *oo = out;
+  const uint8_t *aa = a;
+  const uint8_t *bb = b;
+  unsigned N = type->base.sizeof_instance;
+  while (N--)
+    *oo++ = *aa++ & *bb++;
+  return true;
+}
+bool dbcc_typed_value_bitwise_or  (DBCC_Type *type,
+                                   void *out,
+                                   const void *a,
+                                   const void *b)
+{
+  uint8_t *oo = out;
+  const uint8_t *aa = a;
+  const uint8_t *bb = b;
+  unsigned N = type->base.sizeof_instance;
+  while (N--)
+    *oo++ = *aa++ | *bb++;
+  return true;
+}
+bool dbcc_typed_value_bitwise_xor (DBCC_Type *type,
+                                   void *out,
+                                   const void *a,
+                                   const void *b)
+{
+  uint8_t *oo = out;
+  const uint8_t *aa = a;
+  const uint8_t *bb = b;
+  unsigned N = type->base.sizeof_instance;
+  while (N--)
+    *oo++ = *aa++ ^ *bb++;
+  return true;
+}
+
+bool dbcc_typed_value_negate (DBCC_Type *type,
+                              void *out,
+                              const void *a);
+bool dbcc_typed_value_bitwise_not (DBCC_Type *type,
+                                   void *out,
+                                   const void *in)
+{
+  uint8_t *oo = out;
+  const uint8_t *ii = in;
+  unsigned N = type->base.sizeof_instance;
+  while (N--)
+    *oo++ = ~(*ii++);
+  return true;
+}
+/* out is of type int, and will always be 0 or 1. */
+bool dbcc_typed_value_compare (DBCC_Namespace *ns, 
+                               DBCC_Type *type,
+                               DBCC_BinaryOperator op,
+                               void *out,
+                               const void *a,
+                               const void *b)
+{
+  type = dbcc_type_dequalify (type);
+#define IMPLEMENT_OP(bin_op, ctype)                                     \
+  do{                                                                   \
+    ctype a_value = * (const ctype *) a;                                \
+    ctype b_value = * (const ctype *) b;                                \
+    dbcc_typed_value_set_int64 (dbcc_namespace_get_int_type (ns),       \
+                                out, a_value bin_op b_value);           \
+  }while(0)
+#define IMPLEMENT_ALL_OPS(ctype)                                        \
+  switch (op)                                                           \
+    {                                                                   \
+    case DBCC_BINARY_OPERATOR_LT:   IMPLEMENT_OP(<, ctype);  break;     \
+    case DBCC_BINARY_OPERATOR_LTEQ: IMPLEMENT_OP(<=, ctype); break;     \
+    case DBCC_BINARY_OPERATOR_GT:   IMPLEMENT_OP(>, ctype);  break;     \
+    case DBCC_BINARY_OPERATOR_GTEQ: IMPLEMENT_OP(>=, ctype); break;     \
+    case DBCC_BINARY_OPERATOR_EQ:   IMPLEMENT_OP(==, ctype); break;     \
+    case DBCC_BINARY_OPERATOR_NE:   IMPLEMENT_OP(!=, ctype); break;     \
+    default: assert(0);                                                 \
+    }
+  switch (type->metatype)
+    {
+    case DBCC_TYPE_METATYPE_BOOL:
+    case DBCC_TYPE_METATYPE_INT:
+    case DBCC_TYPE_METATYPE_ENUM:
+      if (dbcc_type_is_unsigned (type))
+        {
+        switch (type->base.sizeof_instance)
+          {
+          case 1: IMPLEMENT_ALL_OPS(uint8_t); break;
+          case 2: IMPLEMENT_ALL_OPS(uint16_t); break;
+          case 4: IMPLEMENT_ALL_OPS(uint32_t); break;
+          case 8: IMPLEMENT_ALL_OPS(uint64_t); break;
+          }
+        }
+      else
+        {
+        switch (type->base.sizeof_instance)
+          {
+          case 1: IMPLEMENT_ALL_OPS(int8_t); break;
+          case 2: IMPLEMENT_ALL_OPS(int16_t); break;
+          case 4: IMPLEMENT_ALL_OPS(int32_t); break;
+          case 8: IMPLEMENT_ALL_OPS(int64_t); break;
+          }
+        }
+      break;
+    case DBCC_TYPE_METATYPE_FLOAT:
+      switch (type->v_float.float_type)
+        {
+        case DBCC_FLOAT_TYPE_FLOAT: IMPLEMENT_ALL_OPS(float); break;
+        case DBCC_FLOAT_TYPE_DOUBLE: IMPLEMENT_ALL_OPS(double); break;
+        case DBCC_FLOAT_TYPE_LONG_DOUBLE: IMPLEMENT_ALL_OPS(long double); break;
+        default:
+          assert(0);
+        }
+      break;
+    default:
+      assert(0);
+    }
+  return true;
+}
+
+DBCC_TriState dbcc_typed_value_scalar_to_tristate (DBCC_Type *type,
+                                                   const void *value);

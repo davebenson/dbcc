@@ -11,6 +11,10 @@ typedef struct DBCC_String DBCC_String;
 typedef struct DBCC_TargetEnvironment DBCC_TargetEnvironment;
 typedef struct DBCC_Global DBCC_Global;
 typedef struct DBCC_Local DBCC_Local;
+typedef struct DBCC_Constant DBCC_Constant;
+
+#define DBCC_INLINE static inline
+#define DBCC_CAN_INLINE 1
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -22,6 +26,7 @@ typedef struct DBCC_Local DBCC_Local;
 #include "dbcc-error.h"
 #include "dbcc-ptr-table.h"
 #include "dbcc-target-environment.h"
+
 
 #define DBCC_ALIGN(offset, align) \
    ( ((offset) + (align) - 1) & (~(size_t)((align) - 1)) )
@@ -123,6 +128,13 @@ typedef struct
 DBCC_EnumValue *dbcc_enum_value_new (DBCC_Symbol *symbol,
                                      int          value);
 
+typedef enum DBCC_TriState
+{
+  DBCC_NO,
+  DBCC_YES,
+  DBCC_MAYBE
+} DBCC_TriState;
+
 struct DBCC_String
 {
   size_t length;
@@ -143,6 +155,57 @@ struct DBCC_Param
   DBCC_Symbol *name;
   int bit_width;                // -1 usually, >= 0 for bit-fields
 };
+
+typedef enum
+{
+  DBCC_CONSTANT_TYPE_VALUE,
+
+  /* outside current unit,
+   * but expected to be constant at run-time. */
+  DBCC_CONSTANT_TYPE_LINK_ADDRESS,
+
+  /* within current translation unit, and defined. */
+  DBCC_CONSTANT_TYPE_UNIT_ADDRESS,
+
+  /* in current address space, only for passing data into JIT code. */
+  DBCC_CONSTANT_TYPE_LOCAL_ADDRESS,
+
+  /* an offset to another address */
+  DBCC_CONSTANT_TYPE_OFFSET,
+
+} DBCC_ConstantType;
+
+struct DBCC_Constant
+{
+  DBCC_ConstantType constant_type;
+  union {
+    struct {
+      void *data;
+    } v_value;
+    struct {
+      DBCC_Symbol *name;
+    } v_link_address;
+    struct {
+      DBCC_Symbol *name;
+      uint64_t address;
+    } v_unit_address;
+    struct {
+      void *local;
+    } v_local_address;
+    struct {
+      DBCC_Constant *base;
+      int64_t offset;
+    } v_offset;
+  };
+};
+DBCC_Constant *dbcc_constant_new_value (DBCC_Type *type,
+                                        const void *optional_value);
+DBCC_Constant *dbcc_constant_new_value0(DBCC_Type *type);
+DBCC_Constant *dbcc_constant_copy      (DBCC_Type *type, 
+                                        DBCC_Constant *to_copy);
+void           dbcc_constant_free      (DBCC_Type *type, 
+                                        DBCC_Constant *to_free);
+
 
 #include "dbcc-type.h"
 #include "dbcc-expr.h"

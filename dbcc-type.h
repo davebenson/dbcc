@@ -44,13 +44,18 @@ struct DBCC_Type_Base
   DBCC_Symbol *name;
   size_t ref_count;
   size_t sizeof_instance;
-  size_t alignof_instance;                      // must be power-of-two
+  size_t alignof_instance;     // must be power-of-two (6.2.8p4)
 };
 
 struct DBCC_TypeInt
 {
   DBCC_Type_Base base;
   bool is_signed;
+};
+
+struct DBCC_TypeBool
+{
+  DBCC_Type_Base base;
 };
 
 typedef enum
@@ -214,8 +219,6 @@ DBCC_Type *dbcc_type_new_array   (DBCC_TargetEnvironment *target,
                                   DBCC_Type     *element_type);
 DBCC_Type *dbcc_type_new_varlen_array(DBCC_TargetEnvironment *target,
                                       DBCC_Type     *element_type);
-DBCC_Type *dbcc_type_new_bitfield    (unsigned       bit_width,
-                                      DBCC_Type     *element_type);
 
 DBCC_Type *dbcc_type_new_function (DBCC_Type          *rettype,
                                    size_t              n_params,
@@ -268,9 +271,22 @@ bool dbcc_type_value_to_json (DBCC_Type   *type,
 DBCC_Type *dbcc_type_dequalify (DBCC_Type *type);
 DBCC_Type *dbcc_type_pointer_dereference (DBCC_Type *type);
 bool dbcc_type_is_incomplete (DBCC_Type *type);
-bool dbcc_types_compatible (DBCC_Type *a, DBCC_Type *b);
+DBCC_TypeQualifier dbcc_type_get_qualifiers (DBCC_Type *type);
 
-bool dbcc_type_implicitly_convertable (DBCC_Type *dst_type, DBCC_Type *src_type);
+/* see 6.2.7 Compatible type and composite type.
+ * Note that types MUST be compatible to be composited.
+ *
+ * Also worth noting:  much of this section is devoted to
+ * types in different translation units.
+ *
+ * Mostly, this is the notion of binary-compatible,
+ * ie, what can be linked together.
+ */
+bool dbcc_types_compatible (DBCC_Type *a, DBCC_Type *b);
+DBCC_Type *dbcc_types_make_composite (DBCC_Type *a, DBCC_Type *b);
+
+bool dbcc_type_implicitly_convertable (DBCC_Type *dst_type,
+                                       DBCC_Type *src_type);
 
 // Can the type be used in a condition expression?
 // (as used in for-loops, if-statements, and do-while-loops)
@@ -280,6 +296,7 @@ bool   dbcc_type_is_scalar (DBCC_Type *type);
 bool   dbcc_type_is_integer (DBCC_Type *type);
 
 bool   dbcc_type_is_const   (DBCC_Type *type);
+bool   dbcc_type_is_unsigned (DBCC_Type *type);
 
 // Can (most) arithmetic operators be applied to this type?
 // Alternately: does it represent a number?
@@ -308,6 +325,8 @@ void       dbcc_typed_value_set_long_double (DBCC_Type *type,
                                       const void *out,
                                       long double v);
 
+void *dbcc_typed_value_alloc_raw (DBCC_Type *type);
+void *dbcc_typed_value_alloc0 (DBCC_Type *type);
 void dbcc_typed_value_add (DBCC_Type *type,
                            void *out,
                            const void *a,
@@ -354,7 +373,7 @@ bool dbcc_typed_value_bitwise_xor (DBCC_Type *type,
 bool dbcc_typed_value_negate (DBCC_Type *type,
                               void *out,
                               const void *a);
-void dbcc_typed_value_bitwise_not (DBCC_Type *type,
+bool dbcc_typed_value_bitwise_not (DBCC_Type *type,
                                    void *out,
                                    const void *in);
 /* out is of type int, and will always be 0 or 1. */
@@ -365,6 +384,6 @@ bool dbcc_typed_value_compare (DBCC_Namespace *ns,
                                const void *a,
                                const void *b);
 
-bool dbcc_typed_value_scalar_to_bool (DBCC_Type *type,
-                                      const void *value);
+DBCC_TriState dbcc_typed_value_scalar_to_tristate (DBCC_Type *type,
+                                                   const void *value);
 #endif /* __DBCC_TYPE_H_ */

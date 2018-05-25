@@ -1502,16 +1502,17 @@ declarator_modify_type (P_Context *context,
         DBCC_Expr *size_expr = declarator->v_array.size;
         if (size_expr != NULL)
           {
-            if (size_expr->base.constant_value == NULL)
+            if (size_expr->base.constant == NULL
+             || size_expr->base.constant->constant_type != DBCC_CONSTANT_TYPE_VALUE)
               {
                 context->error = dbcc_error_new (DBCC_ERROR_CONSTANT_REQUIRED,
-                                     "size of array must be indicated by a constant expression");
+                                     "size of array must be indicated by a numeric constant expression");
                 dbcc_error_add_code_position (context->error, size_expr->base.code_position);
                 return NULL;
               }
             if (!dbcc_cast_value (dbcc_namespace_get_size_type(context->globals), &count,
                                   size_expr->base.value_type,
-                                  size_expr->base.constant_value))
+                                  size_expr->base.constant->v_value.data))
               {
                 context->error = dbcc_error_new (DBCC_ERROR_EXPECTED_INT,
                                                  "bad expression type %s in array-size specifier",
@@ -1530,15 +1531,16 @@ declarator_modify_type (P_Context *context,
       {
         DBCC_Expr *bw = declarator->v_bitfield.bit_width;
         size_t width;
-        if (bw->base.constant_value == NULL)
+        if (bw->base.constant == NULL
+         || bw->base.constant->constant_type != DBCC_CONSTANT_TYPE_VALUE)
           {
             context->error = dbcc_error_new (DBCC_ERROR_CONSTANT_REQUIRED,
-                                             "bitfield width must be a constant");
+                                             "bitfield width must be an integer constant");
             dbcc_error_add_code_position(context->error, bw->base.code_position);
             return NULL;
           }
         if (!dbcc_cast_value (dbcc_namespace_get_size_type(context->globals), &width,
-                              bw->base.value_type, bw->base.constant_value))
+                              bw->base.value_type, bw->base.constant->v_value.data))
           {
             context->error = dbcc_error_new (DBCC_ERROR_EXPECTED_INT,
                                 "bitfield width is not an integral type");
@@ -1549,7 +1551,8 @@ declarator_modify_type (P_Context *context,
         // TODO: verify bitfield width is equal or smaller size of base_type
         // (INCLUDE C11 SECTION REFERENCE)
 
-        return dbcc_type_new_bitfield (width, base_type);
+        //return dbcc_type_new_bitfield (width, base_type);
+        return base_type;
       }
     case P_DECLARATOR_TYPE_PARENTHESIZED:
       {
@@ -1590,13 +1593,13 @@ type_specifiers_to_type (P_Context *context,
   if (specs->counts[P_TYPE_SPECIFIERS_INDEX_COMPLEX])
     {
       if (specs->counts[P_TYPE_SPECIFIERS_INDEX_FLOAT])
-        return dbcc_namespace_get_float_complex_type (context->globals);
+        return dbcc_namespace_get_complex_float_type (context->globals);
       if (specs->counts[P_TYPE_SPECIFIERS_INDEX_DOUBLE])
         {
           if (specs->counts[P_TYPE_SPECIFIERS_INDEX_LONG])
-            return dbcc_namespace_get_long_double_complex_type (context->globals);
+            return dbcc_namespace_get_complex_long_double_type (context->globals);
           else
-            return dbcc_namespace_get_double_complex_type (context->globals);
+            return dbcc_namespace_get_complex_double_type (context->globals);
         }
       context->error = dbcc_error_new (DBCC_ERROR_NO_COMPLEX_VARIANT,
                                        "complex type of given base-type not allowed");
@@ -1605,13 +1608,13 @@ type_specifiers_to_type (P_Context *context,
   else if (specs->counts[P_TYPE_SPECIFIERS_INDEX_IMAGINARY])
     {
       if (specs->counts[P_TYPE_SPECIFIERS_INDEX_FLOAT])
-        return dbcc_namespace_get_float_imaginary_type (context->globals);
+        return dbcc_namespace_get_imaginary_float_type (context->globals);
       if (specs->counts[P_TYPE_SPECIFIERS_INDEX_DOUBLE])
         {
           if (specs->counts[P_TYPE_SPECIFIERS_INDEX_LONG])
-            return dbcc_namespace_get_long_double_imaginary_type (context->globals);
+            return dbcc_namespace_get_imaginary_long_double_type (context->globals);
           else
-            return dbcc_namespace_get_double_imaginary_type (context->globals);
+            return dbcc_namespace_get_imaginary_double_type (context->globals);
         }
       context->error = dbcc_error_new (DBCC_ERROR_NO_COMPLEX_VARIANT,
                                        "imaginary type of given base-type not allowed");
@@ -1989,7 +1992,7 @@ primary_expression(rv) ::= IDENTIFIER(id).
           // should already have been handled at lexing time.
           assert(ns_entry.entry_type == DBCC_NAMESPACE_ENTRY_GLOBAL);
 
-          rv = dbcc_expr_new_symbol (NULL, id.v_identifier, &context->error);
+          rv = dbcc_expr_new_identifier (NULL, id.v_identifier, &context->error);
 
 
         }
@@ -2136,7 +2139,7 @@ postfix_expression(rv) ::= postfix_expression(expr) DECREMENT.
 postfix_expression(rv) ::= LPAREN type_name(type) RPAREN LBRACE initializer_list(list) optional_comma RBRACE.
         { DBCC_StructuredInitializer sinit;
           structured_initializer_from_p_initializer_list (&list, &sinit);
-          rv = dbcc_expr_new_structured_initializer(type, &sinit);  }
+          rv = dbcc_expr_new_structured_initializer(&sinit);  }
 
 optional_comma ::= COMMA.
 optional_comma ::= .
@@ -2292,8 +2295,10 @@ logical_or_expression(rv) ::= logical_or_expression(a) LOGICAL_OR logical_and_ex
 conditional_expression(rv) ::= logical_or_expression(expr).
         { rv = expr; expr = NULL; }
 conditional_expression(rv) ::= logical_or_expression(a) QUESTION_MARK expression(b) COLON conditional_expression(c).
-        { rv = dbcc_expr_new_ternary (a, b, c);
-          a = b = c = NULL; }
+        { rv = dbcc_expr_new_ternary (context->globals, a, b, c, &context->error);
+          if (!rv)
+            FAIL();
+        }
 
 assignment_expression(rv) ::= conditional_expression(expr).
         { rv = expr; expr = NULL; }
@@ -2333,13 +2338,15 @@ expression(rv) ::= expression(a) COMMA assignment_expression(b).
 
 constant_expression(rv) ::= conditional_expression(a).
 	{ rv = a;
-          if (rv->base.constant_value == NULL)
+#if 0
+          if (rv->base.constant == NULL)
             {
               context->error = dbcc_error_new (DBCC_ERROR_CONSTANT_REQUIRED,
                                  "constant value required");
               error_set_code_location_from_expr (context, a);
               FAIL();
             }
+#endif
         }
 
 opt_expression(o) ::= expression(i).
@@ -2634,10 +2641,17 @@ enumerator(rv) ::= enumeration_constant(c) EQUALS constant_expression(v).
           /* 6.7.2.2.2.  The expression that defines the value of an enumeration constant
                          shall be an integer constant expression that has a value representable
                          as an int. */
+          if (v->base.constant == NULL)
+            {
+              context->error = dbcc_error_new (DBCC_ERROR_CONSTANT_REQUIRED,
+                                 "constant value required");
+              error_set_code_location_from_expr (context, v);
+              FAIL();
+            }
           if (!dbcc_cast_value (dbcc_namespace_get_int_type (context->globals),
                                 &value,
                                 v->base.value_type,
-                                v->base.constant_value))
+                                v->base.constant->v_value.data))
             {
               DBCC_Symbol *type_name = v->base.value_type->base.name;
               context->error = dbcc_error_new (DBCC_ERROR_EXPECTED_INT,
@@ -3034,7 +3048,7 @@ iteration_statement(rv) ::= FOR(fr) LPAREN declaration(decl) expression_statemen
             FAIL();
           p_statement_list_init1 (&rv, f); }
 jump_statement(rv) ::= GOTO(g) IDENTIFIER(id) SEMICOLON.
-        { p_statement_list_init1 (&rv, dbcc_statement_new_jump (id.v_identifier, g.code_position)); }
+        { p_statement_list_init1 (&rv, dbcc_statement_new_goto (id.v_identifier, g.code_position)); }
 jump_statement(rv) ::= CONTINUE(c) SEMICOLON.
         { p_statement_list_init1 (&rv, dbcc_statement_new_continue (c.code_position)); }
 jump_statement(rv) ::= BREAK(b) SEMICOLON.

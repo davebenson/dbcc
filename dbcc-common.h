@@ -31,5 +31,5 @@ bool dbcc_common_integer_get_info    (DBCC_TargetEnvironment *target_env,
 bool dbcc_common_floating_point_get_info(DBCC_TargetEnvironment *target_env,
                                          size_t       length,
                                          const char  *str,
-                                         size_t      *sizeof_float_type_out,
+                                         DBCC_FloatType *float_type_out,
                                          DBCC_Error **error);

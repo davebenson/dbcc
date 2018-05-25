@@ -189,8 +189,6 @@ DBCC_Statement *dbcc_statement_new_do_while       (DBCC_Statement     *body,
                                                    DBCC_Error        **error);
 DBCC_Statement *dbcc_statement_new_goto           (DBCC_Symbol        *target,
                                                    DBCC_CodePosition  *cp);
-DBCC_Statement *dbcc_statement_new_jump           (DBCC_Symbol        *target,
-                                                   DBCC_CodePosition  *cp);
 DBCC_Statement *dbcc_statement_new_continue       (DBCC_CodePosition  *cp);
 DBCC_Statement *dbcc_statement_new_break          (DBCC_CodePosition  *cp);
 DBCC_Statement *dbcc_statement_new_return         (DBCC_Expr          *opt_expr,
