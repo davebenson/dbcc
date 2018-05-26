@@ -507,7 +507,7 @@ void dbcc_statement_destroy (DBCC_Statement *statement)
     case DBCC_STATEMENT_DECLARATION:
       dbcc_type_unref (statement->v_declaration.type);
       if (statement->v_declaration.opt_value != NULL)
-        dbcc_expr_unref (statement->v_declaration.opt_value);
+        dbcc_expr_destroy (statement->v_declaration.opt_value);
       break;
     }
   if (statement->base.code_position != NULL)

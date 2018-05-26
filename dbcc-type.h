@@ -268,6 +268,7 @@ bool dbcc_type_value_to_json (DBCC_Type   *type,
                               DskBuffer   *out,
                               DBCC_Error **error);
 
+DBCC_Type *dbcc_type_detypedef (DBCC_Type *type);
 DBCC_Type *dbcc_type_dequalify (DBCC_Type *type);
 DBCC_Type *dbcc_type_pointer_dereference (DBCC_Type *type);
 bool dbcc_type_is_incomplete (DBCC_Type *type);
@@ -319,10 +320,10 @@ bool dbcc_type_is_real (DBCC_Type *type);
 uint64_t   dbcc_typed_value_get_int64 (DBCC_Type *type,
                                        const void *value);
 void       dbcc_typed_value_set_int64(DBCC_Type  *type,
-                                      const void *out,
+                                      void *out,
                                       int64_t     v);
 void       dbcc_typed_value_set_long_double (DBCC_Type *type,
-                                      const void *out,
+                                      void *out,
                                       long double v);
 
 void *dbcc_typed_value_alloc_raw (DBCC_Type *type);

@@ -77,10 +77,21 @@ static uint32_t lookup3 (
   lookup3_final(a,b,c);
   return c;
 }
+
 #define LOOKUP3_HASH_INITVAL   0x125df2a7
 uint32_t dbcc_symbol_hash_len (size_t len, const char *str)
 {
   return lookup3(str, len, LOOKUP3_HASH_INITVAL);
+}
+
+DBCC_SymbolSpace *
+dbcc_symbol_space_new(void)
+{
+  DBCC_SymbolSpace *rv = malloc (sizeof (DBCC_SymbolSpace));
+  rv->ht_size_log2 = 8;
+  rv->ht = calloc (1 << rv->ht_size_log2, sizeof (DBCC_Symbol *));
+  rv->n_symbols = 0;
+  return rv;
 }
 
 DBCC_Symbol *

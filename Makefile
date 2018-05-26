@@ -5,7 +5,7 @@ all: generated tests/test-parser
 
 libdbcc.a: dbcc-parser-p.o dbcc-parser.o dbcc-symbol.o \
         dbcc-code-position.o dbcc-type.o dbcc-statement.o \
-        dbcc-expr.o dbcc-error.o dbcc-namespace.o \
+        dbcc-expr.o dbcc-error.o dbcc-namespace.o dbcc.o \
 dsk/dsk-buffer.o dsk/dsk-common.o dsk/dsk-object.o dsk/dsk-error.o dsk/dsk-mem-pool.o dsk/dsk-dir.o dsk/dsk-file-util.o dsk/dsk-ascii.o dsk/dsk-rand.o dsk/dsk-rand-xorshift1024.o dsk/dsk-fd.o dsk/dsk-path.o
 	ar cru $@ $^
 
