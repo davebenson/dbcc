@@ -42,6 +42,7 @@ struct DBCC_Type_Base
 {
   DBCC_Type_Metatype metatype;
   DBCC_Symbol *name;
+  char *private_cstring;
   size_t ref_count;
   size_t sizeof_instance;
   size_t alignof_instance;     // must be power-of-two (6.2.8p4)
@@ -169,6 +170,7 @@ struct DBCC_TypeFunctionParam
 };
 struct DBCC_TypeFunction
 {
+  DBCC_Type_Base base;
   DBCC_Type *return_type;
   unsigned n_params;
   DBCC_TypeFunctionParam *params;
@@ -386,5 +388,5 @@ bool dbcc_typed_value_compare (DBCC_Namespace *ns,
                                const void *b);
 
 DBCC_TriState dbcc_typed_value_scalar_to_tristate (DBCC_Type *type,
-                                                   const void *value);
+                                                   DBCC_Constant *constant);
 #endif /* __DBCC_TYPE_H_ */

@@ -1,5 +1,6 @@
 #include "dbcc.h"
 #include "dsk/dsk-qsort-macro.h"
+#include <stdio.h>
 
 DBCC_Type *
 dbcc_type_ref   (DBCC_Type *type)
@@ -105,6 +106,174 @@ const char * dbcc_type_metatype_name (DBCC_Type_Metatype metatype)
     #undef CASE
     }
   return NULL;
+}
+
+const char *
+dbcc_type_to_cstring (DBCC_Type *type)
+{
+  if (type->base.private_cstring == NULL)
+    {
+      const char *static_cstring = NULL;
+      char *dynamic_cstring = NULL;
+      switch (type->metatype)
+        {
+        case DBCC_TYPE_METATYPE_VOID:
+          static_cstring = "void";
+          break;
+        case DBCC_TYPE_METATYPE_BOOL:
+          static_cstring = "_Bool";
+          break;
+        case DBCC_TYPE_METATYPE_INT:
+          asprintf (&dynamic_cstring,
+                    "_%s%u",
+                    type->v_int.is_signed ? "Int" : "UInt",
+                    (unsigned)(8 * type->base.sizeof_instance));
+          break;
+        case DBCC_TYPE_METATYPE_FLOAT:
+          switch (type->v_float.float_type)
+            {
+            case DBCC_FLOAT_TYPE_FLOAT:
+              static_cstring = "float";
+              break;
+            case DBCC_FLOAT_TYPE_DOUBLE:
+              static_cstring = "double";
+              break;
+            case DBCC_FLOAT_TYPE_LONG_DOUBLE:
+              static_cstring = "long double";
+              break;
+            case DBCC_FLOAT_TYPE_COMPLEX_FLOAT:
+              static_cstring = "_Complex float";
+              break;
+            case DBCC_FLOAT_TYPE_COMPLEX_DOUBLE:
+              static_cstring = "_Complex double";
+              break;
+            case DBCC_FLOAT_TYPE_COMPLEX_LONG_DOUBLE:
+              static_cstring = "_Complex long double";
+              break;
+            case DBCC_FLOAT_TYPE_IMAGINARY_FLOAT:
+              static_cstring = "_Imag float";
+              break;
+            case DBCC_FLOAT_TYPE_IMAGINARY_DOUBLE:
+              static_cstring = "_Imag double";
+              break;
+            case DBCC_FLOAT_TYPE_IMAGINARY_LONG_DOUBLE:
+              static_cstring = "_Imag long double";
+              break;
+            }
+          break;
+        case DBCC_TYPE_METATYPE_ARRAY:
+          if (type->v_array.n_elements < 0)
+            asprintf (&dynamic_cstring, "%s[]",
+                      dbcc_type_to_cstring (type->v_array.element_type));
+          else
+            asprintf (&dynamic_cstring, "%s[%llu]",
+                      dbcc_type_to_cstring (type->v_array.element_type),
+                      (unsigned long long) type->v_array.n_elements);
+          break;
+        case DBCC_TYPE_METATYPE_VARIABLE_LENGTH_ARRAY:
+          asprintf (&dynamic_cstring, "%s[*]",
+                      dbcc_type_to_cstring (type->v_variable_length_array.element_type));
+          break;
+        case DBCC_TYPE_METATYPE_STRUCT:
+          if (type->v_struct.tag != NULL)
+            asprintf (&dynamic_cstring,
+                      "struct %s",
+                      dbcc_symbol_get_string (type->v_struct.tag));
+          else
+            static_cstring = "struct";
+          break;
+        case DBCC_TYPE_METATYPE_UNION:
+          if (type->v_union.tag != NULL)
+            asprintf (&dynamic_cstring,
+                      "union %s",
+                      dbcc_symbol_get_string (type->v_union.tag));
+          else
+            static_cstring = "union";
+          break;
+        case DBCC_TYPE_METATYPE_ENUM:
+          if (type->v_enum.tag != NULL)
+            asprintf (&dynamic_cstring,
+                      "enum %s",
+                      dbcc_symbol_get_string (type->v_enum.tag));
+          else
+            static_cstring = "enum";
+          break;
+        case DBCC_TYPE_METATYPE_POINTER:
+          asprintf (&dynamic_cstring,
+                    "pointer<%s>",
+                    dbcc_type_to_cstring (type->v_pointer.target_type));
+          break;
+        case DBCC_TYPE_METATYPE_TYPEDEF:
+          static_cstring = dbcc_symbol_get_string (type->base.name);
+          break;
+        case DBCC_TYPE_METATYPE_QUALIFIED:
+          // ConstAtomicVolatileRestrict<subtype>
+          {
+          DBCC_Type *subtype = type->v_qualified.underlying_type;
+          const char *sub = dbcc_type_to_cstring (subtype);
+          DBCC_TypeQualifier q = type->v_qualified.qualifiers;
+          char qs[64];
+          qs[0] = 0;
+          if ((q & DBCC_TYPE_QUALIFIER_CONST) != 0)
+            strcat (qs, "Const");
+          if ((q & DBCC_TYPE_QUALIFIER_ATOMIC) != 0)
+            strcat (qs, "Atomic");
+          if ((q & DBCC_TYPE_QUALIFIER_RESTRICT) != 0)
+            strcat (qs, "Restrict");
+          if ((q & DBCC_TYPE_QUALIFIER_VOLATILE) != 0)
+            strcat (qs, "Volatile");
+          asprintf (&dynamic_cstring, "%s<%s>", qs, sub);
+          }
+          break;
+        case DBCC_TYPE_METATYPE_FUNCTION:
+          {
+            DskBuffer buf = DSK_BUFFER_INIT;
+            DBCC_TypeFunction *f = &type->v_function;
+            const char *tstr = dbcc_type_to_cstring (f->return_type);
+            dsk_buffer_append_string (&buf, tstr);
+            dsk_buffer_append_string (&buf, " function (");
+            for (unsigned i = 0; i < f->n_params; i++)
+              { 
+                if (i > 0)
+                  dsk_buffer_append_string (&buf, ", ");
+                const char *pstr = dbcc_type_to_cstring (f->params[i].type);
+                dsk_buffer_printf (&buf,
+                                   "%s %s",
+                                   pstr,
+                                   dbcc_symbol_get_string (f->params[i].name));
+              }
+            if (f->has_varargs)
+              {
+                if (f->n_params > 0)
+                  dsk_buffer_append_string (&buf, ", ");
+                dsk_buffer_append_string (&buf, "...");
+              }
+            dsk_buffer_append_string (&buf, ")");
+            dynamic_cstring = dsk_buffer_empty_to_string (&buf);
+            break;
+          }
+        case DBCC_TYPE_METATYPE_KR_FUNCTION:
+          {
+            DskBuffer buf = DSK_BUFFER_INIT;
+            DBCC_TypeFunctionKR *f = &type->v_function_kr;
+            dsk_buffer_append_string (&buf, "function (");
+            for (unsigned i = 0; i < f->n_params; i++)
+              { 
+                if (i > 0)
+                  dsk_buffer_append_string (&buf, ", ");
+                dsk_buffer_append_string (&buf, dbcc_symbol_get_string (f->params[i]));
+              }
+            dsk_buffer_append_string (&buf, ")");
+            dynamic_cstring = dsk_buffer_empty_to_string (&buf);
+            break;
+          }
+        }
+      if (static_cstring)
+        type->base.private_cstring = strdup (static_cstring);
+      else
+        type->base.private_cstring = dynamic_cstring;
+    }
+  return type->base.private_cstring;
 }
 
 static inline DBCC_Type *
@@ -2052,5 +2221,33 @@ bool dbcc_typed_value_compare (DBCC_Namespace *ns,
   return true;
 }
 
-DBCC_TriState dbcc_typed_value_scalar_to_tristate (DBCC_Type *type,
-                                                   const void *value);
+DBCC_TriState
+dbcc_typed_value_scalar_to_tristate (DBCC_Type  *type,
+                                     DBCC_Constant *constant)
+{
+  if (type->metatype == DBCC_TYPE_METATYPE_FLOAT
+   || type->metatype == DBCC_TYPE_METATYPE_INT
+   || type->metatype == DBCC_TYPE_METATYPE_ENUM)
+    {
+      if (constant->constant_type != DBCC_CONSTANT_TYPE_VALUE)
+        return DBCC_MAYBE;
+      if (dbcc_is_zero (type->base.sizeof_instance,
+                        constant->v_value.data))
+        return DBCC_NO;
+      else
+        return DBCC_YES;
+    }
+  else if (type->metatype == DBCC_TYPE_METATYPE_POINTER)
+    {
+      if (constant->constant_type != DBCC_CONSTANT_TYPE_VALUE)
+        return DBCC_MAYBE;
+      // TODO: maybe constant-type for null-ptr?
+      if (dbcc_is_zero (type->base.sizeof_instance,
+                        constant->v_value.data))
+        return DBCC_NO;
+      else
+        return DBCC_YES;
+    }
+  else
+    return DBCC_MAYBE;
+}

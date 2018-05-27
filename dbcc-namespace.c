@@ -243,7 +243,11 @@ dbcc_namespace_lookup            (DBCC_Namespace      *ns,
 
 DBCC_Type *
 dbcc_namespace_lookup_struct_tag (DBCC_Namespace      *ns,
-                                  DBCC_Symbol         *symbol);
+                                  DBCC_Symbol         *symbol)
+{
+  return dbcc_ptr_table_lookup_value (&ns->struct_tag_symbols, symbol);
+}
+
 DBCC_Type *
 dbcc_namespace_lookup_union_tag  (DBCC_Namespace      *ns,
                                   DBCC_Symbol         *symbol);

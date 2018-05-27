@@ -21,9 +21,11 @@ typedef void (*DBCC_PtrTable_VisitFunc)(DBCC_PtrTable_Entry *entry,
 
 void                 dbcc_ptr_table_init   (DBCC_PtrTable *to_init);
 DBCC_PtrTable_Entry *dbcc_ptr_table_lookup (DBCC_PtrTable *table,
-                                            const char    *key);
+                                            const void    *key);
+void                *dbcc_ptr_table_lookup_value (DBCC_PtrTable *table,
+                                            const void    *key);
 DBCC_PtrTable_Entry *dbcc_ptr_table_force  (DBCC_PtrTable *table,
-                                            const char    *key,
+                                            const void    *key,
                                             bool          *created_opt_out);
 void                 dbcc_ptr_table_foreach(DBCC_PtrTable *table,
                                             DBCC_PtrTable_VisitFunc func,

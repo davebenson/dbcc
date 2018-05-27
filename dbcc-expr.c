@@ -2,6 +2,49 @@
 
 #define is_zero   dbcc_is_zero
 
+bool
+dbcc_expr_is_lvalue (DBCC_Expr *expr)
+{
+  if (expr->base.value_type != NULL
+   && (dbcc_type_get_qualifiers (expr->base.value_type)
+       & DBCC_TYPE_QUALIFIER_CONST) != 0)
+    {
+      // lvalue should not be const
+      return false;
+    }
+
+  switch (expr->expr_type)
+    {
+    case DBCC_EXPR_TYPE_IDENTIFIER:
+      switch (expr->v_identifier.id_type)
+        {
+        case DBCC_IDENTIFIER_TYPE_UNKNOWN:
+          // just assume the best if type-inference is not complete
+          return true;
+
+        case DBCC_IDENTIFIER_TYPE_GLOBAL:
+        case DBCC_IDENTIFIER_TYPE_LOCAL:
+          /* const-check is above. */
+          return true;
+
+        case DBCC_IDENTIFIER_TYPE_ENUM_VALUE:
+          return false;
+        }
+
+    case DBCC_EXPR_TYPE_ACCESS:
+      if (expr->v_access.is_pointer)
+        return true;
+      else
+        return dbcc_expr_is_lvalue (expr->v_access.object);
+
+    case DBCC_EXPR_TYPE_UNARY_OP:
+      return expr->v_unary.op == DBCC_UNARY_OPERATOR_DEREFERENCE;
+
+    default:
+      return false;
+    }
+}
+
 static inline DBCC_Expr *
 expr_alloc (DBCC_Expr_Type t)
 {
@@ -2580,3 +2623,5 @@ success:
   expr->base.types_inferred = true;
   return true;
 }
+
+
