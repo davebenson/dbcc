@@ -166,6 +166,7 @@ dbcc_symbol_space_try_len   (DBCC_SymbolSpace *ns, size_t len, const char *str)
   return NULL;
 }
 
+#undef dbcc_symbol_ref
 DBCC_Symbol *
 dbcc_symbol_ref (DBCC_Symbol *symbol)
 {

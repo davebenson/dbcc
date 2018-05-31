@@ -3,7 +3,8 @@
 bool dbcc_is_zero                    (size_t      length,
                                       const void *data);
 
-bool dbcc_common_char_constant_value (size_t length,
+bool dbcc_common_char_constant_value (DBCC_TargetEnvironment *env,
+                                      size_t length,
                                       const char *str,
                                       uint32_t   *codepoint_out,
                                       size_t     *sizeof_char,

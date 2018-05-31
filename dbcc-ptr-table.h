@@ -12,6 +12,7 @@ struct DBCC_PtrTable_Entry
 struct DBCC_PtrTable
 {
   size_t size;          /* prime or 0*/
+  unsigned size_index;
   size_t occupancy;
   DBCC_PtrTable_Entry **table;
 };
@@ -27,6 +28,9 @@ void                *dbcc_ptr_table_lookup_value (DBCC_PtrTable *table,
 DBCC_PtrTable_Entry *dbcc_ptr_table_force  (DBCC_PtrTable *table,
                                             const void    *key,
                                             bool          *created_opt_out);
+void                 dbcc_ptr_table_set    (DBCC_PtrTable *table,
+                                            const void    *key,
+                                            void          *value);
 void                 dbcc_ptr_table_foreach(DBCC_PtrTable *table,
                                             DBCC_PtrTable_VisitFunc func,
                                             void          *visit_data);

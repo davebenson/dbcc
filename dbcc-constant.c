@@ -36,16 +36,20 @@ dbcc_constant_copy      (DBCC_Type *type,
               type->base.sizeof_instance);
       break;
     case DBCC_CONSTANT_TYPE_LINK_ADDRESS:
-      ...
+      rv->v_link_address.name = to_copy->v_link_address.name;
       break;
     case DBCC_CONSTANT_TYPE_UNIT_ADDRESS:
-      ...
+      rv->v_unit_address.name = to_copy->v_unit_address.name;
+      rv->v_unit_address.address = to_copy->v_unit_address.address;
       break;
     case DBCC_CONSTANT_TYPE_LOCAL_ADDRESS:
-      ...
+      break;
+    case DBCC_CONSTANT_TYPE_OFFSET:
+      rv->v_offset.base = dbcc_constant_copy (type, to_copy->v_offset.base);
+      rv->v_offset.offset = to_copy->v_offset.offset;
       break;
     }
-  free (rv);
+  return rv;
 }
 
 void
@@ -58,13 +62,15 @@ dbcc_constant_free     (DBCC_Type *type,
       free (to_free->v_value.data);
       break;
     case DBCC_CONSTANT_TYPE_LINK_ADDRESS:
-      ...
+      //dbcc_symbol_unref (to_copy->v_link_address.name);
       break;
     case DBCC_CONSTANT_TYPE_UNIT_ADDRESS:
-      ...
+      //dbcc_symbol_unref (to_copy->v_unit_address.name);
       break;
     case DBCC_CONSTANT_TYPE_LOCAL_ADDRESS:
-      ...
+      break;
+    case DBCC_CONSTANT_TYPE_OFFSET:
+      dbcc_constant_free (type, to_free->v_offset.base);
       break;
     }
   free(to_free);

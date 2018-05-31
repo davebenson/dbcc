@@ -237,7 +237,7 @@ context_new_struct               (P_Context         *context,
     }
   else
     {
-      rv = dbcc_type_new_struct (context->target_env,
+      rv = dbcc_type_new_struct (context->globals,
                                  tag,
                                  n_params, params,
                                  &context->error);
@@ -282,7 +282,7 @@ context_new_union               (P_Context         *context,
     }
   else
     {
-      rv = dbcc_type_new_union (context->target_env,
+      rv = dbcc_type_new_union (context->globals,
                                 tag, n_params, params,
                                 &context->error);
       if (rv == NULL)
@@ -2603,7 +2603,7 @@ enum_specifier(rv) ::= ENUM opt_identifier(id) LBRACE enumerator_list(list) opt_
           for (P_EnumValueNode *e = list.first; e != NULL; e = e->next, i++)
             evalues[i] = *e->enum_value;
           DBCC_Error *error = NULL;
-          rv = dbcc_type_new_enum (context->target_env, id, n_values, evalues, &error);
+          rv = dbcc_type_new_enum (context->globals, id, n_values, evalues, &error);
           p_enumerator_list_clear (&list);
         }
 

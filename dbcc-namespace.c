@@ -249,11 +249,18 @@ dbcc_namespace_lookup_struct_tag (DBCC_Namespace      *ns,
 }
 
 DBCC_Type *
-dbcc_namespace_lookup_union_tag  (DBCC_Namespace      *ns,
-                                  DBCC_Symbol         *symbol);
+dbcc_namespace_lookup_union_tag (DBCC_Namespace      *ns,
+                                  DBCC_Symbol         *symbol)
+{
+  return dbcc_ptr_table_lookup_value (&ns->union_tag_symbols, symbol);
+}
+
 DBCC_Type *
 dbcc_namespace_lookup_enum_tag   (DBCC_Namespace      *ns,
-                                  DBCC_Symbol         *symbol);
+                                  DBCC_Symbol         *symbol)
+{
+  return dbcc_ptr_table_lookup_value (&ns->enum_tag_symbols, symbol);
+}
 void dbcc_namespace_add_by_tag   (DBCC_Namespace      *ns,
                                   DBCC_Type           *type);   // must be struct, union or enum with tag
 

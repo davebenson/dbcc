@@ -487,8 +487,9 @@ void dbcc_statement_destroy (DBCC_Statement *statement)
       break;
 
     case DBCC_STATEMENT_GOTO:
-      break;
-
+    case DBCC_STATEMENT_BREAK:
+    case DBCC_STATEMENT_CONTINUE:
+    case DBCC_STATEMENT_RETURN:
     case DBCC_STATEMENT_LABEL:
       break;
 

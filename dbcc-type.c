@@ -289,12 +289,20 @@ new_type (DBCC_Type_Metatype t)
 
 
 DBCC_Type *
-dbcc_type_new_enum (DBCC_TargetEnvironment *env,
+dbcc_type_new_enum (DBCC_Namespace         *ns,
                     DBCC_Symbol            *optional_tag,
                     size_t                  n_values,
                     DBCC_EnumValue         *values,
                     DBCC_Error            **error)
 {
+  if (optional_tag != NULL
+   && dbcc_ptr_table_lookup_value (&ns->enum_tag_symbols, optional_tag) != NULL)
+    {
+      *error = dbcc_error_new (DBCC_ERROR_DUPLICATE_TAG,
+                               "multiple enums with tag '%s'",
+                               dbcc_symbol_get_string (optional_tag));
+      return NULL;
+    }
   DBCC_Symbol **s = DBCC_NEW_ARRAY(n_values, DBCC_Symbol *);
   for (size_t i = 0; i < n_values; i++)
     s[i] = values[i].name;
@@ -316,10 +324,12 @@ dbcc_type_new_enum (DBCC_TargetEnvironment *env,
   t->v_enum.tag = optional_tag;
   t->v_enum.n_values = n_values;
   t->v_enum.values = DBCC_NEW_ARRAY(n_values, DBCC_EnumValue);
-  t->base.sizeof_instance = env->sizeof_int;
+  t->base.sizeof_instance = ns->target_env->sizeof_int;
   for (size_t i = 0; i < n_values; i++)
     t->v_enum.values[i] = values[i];
 
+  if (optional_tag != NULL)
+    dbcc_ptr_table_set (&ns->enum_tag_symbols, optional_tag, t);
   return t;
 }
 
@@ -502,7 +512,7 @@ init_type_struct_members (DBCC_TargetEnvironment *env,
 }
 
 DBCC_Type *
-dbcc_type_new_struct  (DBCC_TargetEnvironment *env,
+dbcc_type_new_struct  (DBCC_Namespace     *ns,
                        DBCC_Symbol        *tag,
                        size_t              n_members,
                        DBCC_Param         *members,
@@ -515,7 +525,7 @@ dbcc_type_new_struct  (DBCC_TargetEnvironment *env,
   t->v_struct.members_sorted_by_sym = member_indices_bysym;
   t->v_struct.tag = tag;
   t->v_struct.incomplete = false;
-  init_type_struct_members (env, t, n_members, members);
+  init_type_struct_members (ns->target_env, t, n_members, members);
   return t;
 }
 
@@ -571,12 +581,20 @@ init_type_union_branches (DBCC_TargetEnvironment *env,
 }
 
 DBCC_Type *
-dbcc_type_new_union    (DBCC_TargetEnvironment *env,
+dbcc_type_new_union    (DBCC_Namespace     *ns,
                         DBCC_Symbol        *tag,
                         size_t              n_branches,
                         DBCC_Param         *branches,
                         DBCC_Error        **error)
 {
+  if (tag != NULL
+   && dbcc_ptr_table_lookup_value (&ns->union_tag_symbols, tag) != NULL)
+    {
+      *error = dbcc_error_new (DBCC_ERROR_DUPLICATE_TAG,
+                               "multiple unions with tag '%s'",
+                               dbcc_symbol_get_string (tag));
+      return NULL;
+    }
   size_t *indices_bysym = get_members_by_sym (n_branches, branches, error);
   if (indices_bysym == NULL)
     return NULL;
@@ -584,7 +602,9 @@ dbcc_type_new_union    (DBCC_TargetEnvironment *env,
   t->v_union.members_sorted_by_sym = indices_bysym;
   t->v_union.tag = tag;
   t->v_union.incomplete = false;
-  init_type_union_branches (env, t, n_branches, branches);
+  init_type_union_branches (ns->target_env, t, n_branches, branches);
+  if (tag != NULL)
+    dbcc_ptr_table_set (&ns->union_tag_symbols, tag, t);
   return t;
 }
 
@@ -1380,9 +1400,25 @@ DBCC_TypeQualifier dbcc_type_get_qualifiers (DBCC_Type *type)
  * ie, what can be linked together.
  */
 bool
-dbcc_types_compatible (DBCC_Type *a, DBCC_Type *b);
+dbcc_types_compatible (DBCC_Type *a, DBCC_Type *b)
+{
+  a = dbcc_type_dequalify (a);
+  b = dbcc_type_dequalify (b);
+  return a == b;
+}
+
 DBCC_Type *
-dbcc_types_make_composite (DBCC_Type *a, DBCC_Type *b);
+dbcc_types_make_composite (DBCC_Namespace *ns,
+                           DBCC_Type *a,
+                           DBCC_Type *b,
+                           DBCC_Error **error)
+{
+  DBCC_Type *base = dbcc_type_dequalify (a);    // equal to b dequalified
+  assert(dbcc_type_dequalify (b) == base);
+  DBCC_TypeQualifier q = dbcc_type_get_qualifiers (a)
+                       | dbcc_type_get_qualifiers (b);
+  return dbcc_type_new_qualified (ns->target_env, base, q, error);
+}
 
 bool
 dbcc_type_implicitly_convertable (DBCC_Type *dst_type,

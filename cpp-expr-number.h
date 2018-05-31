@@ -25,7 +25,7 @@ void DBCC_CPPExpr_Evaluator(
   void *yyp,                   /* The parser */
   int yymajor,                 /* The major token code number */
   CPP_Expr_Result yyminor,      /* The value for the token */
-  CPP_EvalParserResult *eval_result
+  CPP_Expr_Result *eval_result
 );
 void DBCC_CPPExpr_EvaluatorFree(
   void *p,                    /* The parser to be deleted */

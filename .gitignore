@@ -6,3 +6,5 @@ cpp-expr-evaluate-p.h
 cpp-expr-evaluate-p.out
 libdbcc.a
 *.o
+generated
+lemon

@@ -47,6 +47,8 @@ DBCC_INLINE const char *dbcc_symbol_get_string  (const DBCC_Symbol *symbol);
 uint32_t           dbcc_symbol_hash_len        (size_t      len,
                                                 const char *str);
 
+#define dbcc_symbol_ref(symbol)   (symbol)
+#define dbcc_symbol_unref(symbol)   (void)(symbol)
 
 #if DBCC_CAN_INLINE || defined(DBCC_IMPLEMENT_INLINES)
 DBCC_INLINE const char *dbcc_symbol_get_string (const DBCC_Symbol *symbol)
@@ -55,4 +57,3 @@ DBCC_INLINE const char *dbcc_symbol_get_string (const DBCC_Symbol *symbol)
 }
 #endif
 
-#define dbcc_symbol_unref(s) do{}while(0)

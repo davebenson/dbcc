@@ -207,7 +207,7 @@ union DBCC_Type
 DBCC_Type *dbcc_type_ref   (DBCC_Type *type);
 void       dbcc_type_unref (DBCC_Type *type);
 
-DBCC_Type *dbcc_type_new_enum (DBCC_TargetEnvironment *target_env,
+DBCC_Type *dbcc_type_new_enum (DBCC_Namespace  *ns,
                                DBCC_Symbol     *optional_tag,
                                size_t           n_values,
                                DBCC_EnumValue  *values,
@@ -232,7 +232,7 @@ DBCC_Type *dbcc_type_new_qualified(DBCC_TargetEnvironment *env,
                                    DBCC_TypeQualifier      qualifiers,
                                    DBCC_Error            **error);
 
-DBCC_Type *dbcc_type_new_struct   (DBCC_TargetEnvironment *env,
+DBCC_Type *dbcc_type_new_struct   (DBCC_Namespace     *ns,
                                    DBCC_Symbol        *tag,
                                    size_t              n_members,
                                    DBCC_Param         *members,
@@ -245,7 +245,7 @@ bool       dbcc_type_complete_struct(DBCC_TargetEnvironment *env,
                                      DBCC_Error            **error);
 DBCC_TypeStructMember *dbcc_type_struct_lookup_member (DBCC_Type *type, DBCC_Symbol *name);
 
-DBCC_Type *dbcc_type_new_union    (DBCC_TargetEnvironment *env,
+DBCC_Type *dbcc_type_new_union    (DBCC_Namespace     *ns,
                                    DBCC_Symbol        *tag,
                                    size_t              n_cases,
                                    DBCC_Param         *cases,
@@ -286,7 +286,10 @@ DBCC_TypeQualifier dbcc_type_get_qualifiers (DBCC_Type *type);
  * ie, what can be linked together.
  */
 bool dbcc_types_compatible (DBCC_Type *a, DBCC_Type *b);
-DBCC_Type *dbcc_types_make_composite (DBCC_Type *a, DBCC_Type *b);
+DBCC_Type * dbcc_types_make_composite (DBCC_Namespace *ns,
+                                       DBCC_Type *a,
+                                       DBCC_Type *b,
+                                       DBCC_Error **error);
 
 bool dbcc_type_implicitly_convertable (DBCC_Type *dst_type,
                                        DBCC_Type *src_type);

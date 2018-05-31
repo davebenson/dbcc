@@ -2372,7 +2372,7 @@ do_ternary_operator_type_inference (DBCC_Namespace *ns,
           dbcc_error_add_code_position (*error, expr->base.code_position);
           return false;
         }
-      DBCC_Type *composite = dbcc_types_make_composite (a_pointed_at, b_pointed_at);
+      DBCC_Type *composite = dbcc_types_make_composite (ns, a_pointed_at, b_pointed_at, error);
       if (composite == NULL)
         goto incompatible_types;
 
@@ -2413,10 +2413,11 @@ do_ternary_operator_type_inference (DBCC_Namespace *ns,
     }
 
 incompatible_types:
-  *error = dbcc_error_new (DBCC_ERROR_TYPE_MISMATCH,
-                           "incompatible types %s and %s for ? :",
-                           dbcc_type_to_cstring (atype),
-                           dbcc_type_to_cstring (btype));
+  if (*error == NULL)
+    *error = dbcc_error_new (DBCC_ERROR_TYPE_MISMATCH,
+                             "incompatible types %s and %s for ? :",
+                             dbcc_type_to_cstring (atype),
+                             dbcc_type_to_cstring (btype));
   dbcc_error_add_code_position (*error, aexpr->base.code_position);
   return false;
 }
@@ -2518,6 +2519,14 @@ bool dbcc_expr_is_null_pointer_constant (DBCC_Expr *expr)
     return false;
 }
 
+static DBCC_Constant *
+mk_enum_constant (DBCC_Type *enum_type, DBCC_EnumValue *ev)
+{
+  DBCC_Constant *rv = dbcc_constant_new_value (enum_type, NULL);
+  dbcc_typed_value_set_int64 (enum_type, rv->v_value.data, ev->value);
+  return rv;
+}
+
 bool
 dbcc_expr_do_type_inference (DBCC_Namespace *ns,
                              DBCC_Expr *expr,
@@ -2615,6 +2624,40 @@ dbcc_expr_do_type_inference (DBCC_Namespace *ns,
       *error = dbcc_error_new (DBCC_ERROR_CANNOT_INFER_TYPE,
                                "cannot infer type from initializer");
       return false;
+
+    case DBCC_EXPR_TYPE_IDENTIFIER:
+      {
+        DBCC_NamespaceEntry entry;
+        if (!dbcc_namespace_lookup (ns, expr->v_identifier.name, &entry))
+          {
+            *error = dbcc_error_new (DBCC_ERROR_NOT_FOUND,
+                                     "identifier '%s' not found",
+                                     dbcc_symbol_get_string (expr->v_identifier.name));
+            dbcc_error_add_code_position (*error, expr->base.code_position);
+            return false;
+          }
+        switch (entry.entry_type)
+          {
+          case DBCC_NAMESPACE_ENTRY_TYPEDEF:
+            assert(0);
+            return false;
+          case DBCC_NAMESPACE_ENTRY_ENUM_VALUE:
+            {
+              DBCC_Type *enum_type = entry.v_enum_value.enum_type;
+              DBCC_EnumValue *ev = entry.v_enum_value.enum_value;
+              expr->base.value_type = enum_type;
+              expr->base.constant = mk_enum_constant (enum_type, ev);
+            }
+            break;
+          case DBCC_NAMESPACE_ENTRY_GLOBAL:
+            expr->base.value_type = entry.v_global->type;
+            break;
+          case DBCC_NAMESPACE_ENTRY_LOCAL:
+            expr->base.value_type = entry.v_local->type;
+            break;
+          }
+        goto success;
+      }
     }
 
   assert(0);
@@ -2623,5 +2666,3 @@ success:
   expr->base.types_inferred = true;
   return true;
 }
-
-

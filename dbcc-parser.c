@@ -1413,7 +1413,8 @@ expand_macros (DBCC_Parser *parser,
  * The semantics of these expressions is given in Section 6.6.
  */
 static bool
-tokens_to_boolean_value (unsigned     n_tokens,
+tokens_to_boolean_value (DBCC_TargetEnvironment *target_env,
+                         unsigned     n_tokens,
                          CPP_Token   *tokens,
                          bool        *result_out,
                          DBCC_Error **error)
@@ -1430,7 +1431,8 @@ tokens_to_boolean_value (unsigned     n_tokens,
           {
             uint32_t v;
             size_t sizeof_char;
-            if (!dbcc_common_char_constant_value (tokens[i].length,
+            if (!dbcc_common_char_constant_value (target_env,
+                                                  tokens[i].length,
                                                   tokens[i].str,
                                                   &v,
                                                   &sizeof_char,
@@ -1669,7 +1671,7 @@ eval_cpp_expr_boolean (DBCC_Parser *parser,
         *error_out = res.v_error.error;
         return false;
     }
-  bool rv = tokens_to_boolean_value (n_tokens, tokens, result_out, error_out);
+  bool rv = tokens_to_boolean_value (parser->target_environment, n_tokens, tokens, result_out, error_out);
   return rv;
 }
 
@@ -2662,7 +2664,8 @@ dbcc_parser_parse_file      (DBCC_Parser   *parser,
                       {
                         uint32_t value;
                         size_t sizeof_char;
-                        if (!dbcc_common_char_constant_value (cpp_tokens[at].length,
+                        if (!dbcc_common_char_constant_value (parser->target_environment,
+                                                              cpp_tokens[at].length,
                                                               cpp_tokens[at].str,
                                                               &value,
                                                               &sizeof_char,

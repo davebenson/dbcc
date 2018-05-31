@@ -1,20 +1,21 @@
 
 %name DBCC_CPPExpr_Evaluator
 %include {
+#include "dbcc.h"
 #include "cpp-expr-number.h"
-#define IS_INT64(num) ((num).type == CPP_EXPR_NUMBER_INT64)
+#define IS_INT64(num) ((num).type == CPP_EXPR_RESULT_INT64)
 #define BOTH_INT64(num1,num2)  ( IS_INT64(num1) && IS_INT64(num2) )
-#define MK_INT64(v)      ((CPP_Expr_Number) { .type = CPP_EXPR_NUMBER_INT64, .v_int64 = (v); })
-#define MK_DOUBLE(v)     ((CPP_Expr_Number) { .type = CPP_EXPR_NUMBER_DOUBLE, .v_double = (v); })
-#define GET_DOUBLE(v)    (((v).type == CPP_EXPR_NUMBER_DOUBLE) ? (v).v_double : (double)((v).v_int64))
-#define MK_FAIL()        ((CPP_Expr_Number) { .type = CPP_EXPR_NUMBER_FAIL; })
+#define MK_INT64(v)      ((CPP_Expr_Result) { .type = CPP_EXPR_RESULT_INT64, .v_int64 = (v) })
+#define MK_FAIL()        ((CPP_Expr_Result) { .type = CPP_EXPR_RESULT_FAIL })
+#define IS_FAIL(res)     ((res).type == CPP_EXPR_RESULT_FAIL)
+#define EITHER_FAIL(a,b) (IS_FAIL(a) || IS_FAIL(b))
 }
 
-%token_type {CPP_Expr_Number}
+%token_type {CPP_Expr_Result}
 %token_prefix {CPP_EXPR_}
 %start_symbol evaluated_expression
-%type value {CPP_Expr_Number}
-%type evaluated_expression {CPP_Expr_Number}
+%type value {CPP_Expr_Result}
+%type evaluated_expression {CPP_Expr_Result}
 %extra_argument {CPP_Expr_Result *result}
 
 %left LTLT GTGT.
@@ -27,18 +28,10 @@
 %left BANG TILDE.
 %nonassoc GT GTEQ LT LTEQ EQ NEQ.
 
+%destructor value {(void) $$; (void) result; }
 
 evaluated_expression(out) ::= value(in).
-        { out = in;
-          switch (in.type)
-            {
-            case CPP_EXPR_NUMBER_FAIL:
-              result->bool_result = false;
-              break;
-            case CPP_EXPR_NUMBER_INT64:
-              result->bool_result = (in.v_int64 != 0);
-              break;
-            }
+        { *result = out = in;
         }
 
 value(out) ::= NUMBER(n).
@@ -121,26 +114,26 @@ value(out) ::= value(a) BITWISE_OR value(b).
           else
             out = MK_INT64(a.v_int64 | b.v_int64); }
 value(out) ::= value(a) LOGICAL_AND value(b).
-        { if (a.type == CPP_EXPR_NUMBER_FAIL)
+        { if (a.type == CPP_EXPR_RESULT_FAIL)
             out = MK_FAIL();
           else if (a.v_int64 == 0)
             out = MK_INT64(0);
           else
             out = b; }
 value(out) ::= value(a) LOGICAL_OR value(b).
-        { if (a.type == CPP_EXPR_NUMBER_FAIL)
+        { if (a.type == CPP_EXPR_RESULT_FAIL)
             out = MK_FAIL();
           else if (a.v_int64 != 0)
             out = MK_INT64(1);
           else
             out = b; }
 value(out) ::= BANG value(in).
-        { if (in.type == CPP_EXPR_NUMBER_FAIL)
+        { if (in.type == CPP_EXPR_RESULT_FAIL)
             out = MK_FAIL();
           else
             out = MK_INT64(in.v_int64 == 0); }
 value(out) ::= TILDE value(in).
-        { if (in.type == CPP_EXPR_NUMBER_FAIL)
+        { if (in.type == CPP_EXPR_RESULT_FAIL)
             out = MK_FAIL();
           else
             out = MK_INT64(~in.v_int64); }
