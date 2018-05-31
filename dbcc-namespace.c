@@ -239,7 +239,15 @@ dbcc_namespace_new_scope         (void);
 bool
 dbcc_namespace_lookup            (DBCC_Namespace      *ns,
                                   DBCC_Symbol         *symbol,
-                                  DBCC_NamespaceEntry *out);
+                                  DBCC_NamespaceEntry *out)
+{
+  DBCC_NamespaceEntry *entry;
+  entry = dbcc_ptr_table_lookup_value (&ns->symbols, symbol);
+  if (entry == NULL)
+    return false;
+  *out = *entry;
+  return true;
+}
 
 DBCC_Type *
 dbcc_namespace_lookup_struct_tag (DBCC_Namespace      *ns,
@@ -262,9 +270,31 @@ dbcc_namespace_lookup_enum_tag   (DBCC_Namespace      *ns,
   return dbcc_ptr_table_lookup_value (&ns->enum_tag_symbols, symbol);
 }
 void dbcc_namespace_add_by_tag   (DBCC_Namespace      *ns,
-                                  DBCC_Type           *type);   // must be struct, union or enum with tag
-
-
+                                  DBCC_Type           *type)
+{
+  DBCC_PtrTable *table;
+  DBCC_Symbol *tag;
+  if (type->metatype == DBCC_TYPE_METATYPE_ENUM)
+    {
+      table = &ns->enum_tag_symbols;
+      tag = type->v_enum.tag;
+    }
+  else if (type->metatype == DBCC_TYPE_METATYPE_UNION)
+    {
+      table = &ns->union_tag_symbols;
+      tag = type->v_union.tag;
+    }
+  else if (type->metatype == DBCC_TYPE_METATYPE_STRUCT)
+    {
+      table = &ns->struct_tag_symbols;
+      tag = type->v_struct.tag;
+    }
+  else
+    {
+      assert(0);
+    }
+  dbcc_ptr_table_set (table, tag, type);
+}
 
 void dbcc_namespace_add_enum_value (DBCC_Namespace *ns,
                                     DBCC_EnumValue *enum_value);

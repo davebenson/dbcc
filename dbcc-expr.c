@@ -2577,7 +2577,8 @@ dbcc_expr_do_type_inference (DBCC_Namespace *ns,
                                         expr->v_inplace_binary.b,
                                         error))
         return false;
-      expr->base.value_type = expr->v_inplace_binary.inout->base.value_type;
+      if (!do_inplace_binary_type_inference (ns, expr, error))
+        return false;
       goto success;
 
     case DBCC_EXPR_TYPE_INPLACE_UNARY_OP:
@@ -2586,7 +2587,9 @@ dbcc_expr_do_type_inference (DBCC_Namespace *ns,
                                         expr->v_inplace_unary.inout,
                                         error))
         return false;
-      expr->base.value_type = expr->v_inplace_unary.inout->base.value_type;
+
+      if (!do_inplace_unary_type_inference (ns, expr, error))
+        return false;
       goto success;
 
     case DBCC_EXPR_TYPE_CONSTANT:

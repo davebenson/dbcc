@@ -46,3 +46,11 @@ const char *dbcc_inplace_binary_operator_name (DBCC_InplaceBinaryOperator op)
 }
 
 
+DBCC_EnumValue *dbcc_enum_value_new (DBCC_Symbol *symbol,
+                                     int          value)
+{
+  DBCC_EnumValue *rv = malloc (sizeof (DBCC_EnumValue));
+  rv->name = symbol;
+  rv->value = value;
+  return rv;
+}

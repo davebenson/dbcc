@@ -201,6 +201,22 @@ dbcc_common_number_is_integral  (size_t       length,
   return true;
 }
 
+static inline bool
+is_alphanum  (char c)
+{
+  return ('0' <= c && c <= '9')
+      || ('a' <= c && c <= 'z')
+      || ('A' <= c && c <= 'Z');
+}
+
+static inline bool
+is_hex_digit  (char c)
+{
+  return ('0' <= c && c <= '9')
+      || ('a' <= c && c <= 'f')
+      || ('A' <= c && c <= 'F');
+}
+
 bool
 dbcc_common_number_parse_int64  (size_t       length,
                                  const char  *str,
@@ -209,14 +225,8 @@ dbcc_common_number_parse_int64  (size_t       length,
 {
   unsigned L;
   for (L = 0; L < length; L++)
-    {
-      if (!('0' <= str[L] && str[L] <= '9')
-       && !('a' <= str[L] && str[L] <= 'z')
-       && !('A' <= str[L] && str[L] <= 'Z')
-       && (str[L] != '.')
-         )
-        break;
-    }
+    if (!is_alphanum (str[L]) && str[L] != '.')
+      break;
   char *val = alloca (L + 1);
   memcpy (val, str, L);
   val[L] = 0;
@@ -240,6 +250,7 @@ dbcc_common_string_literal_value (size_t       length,
 {
   ...
 }
+#endif
 
 bool
 dbcc_common_integer_get_info    (DBCC_TargetEnvironment *target_env,
@@ -249,9 +260,105 @@ dbcc_common_integer_get_info    (DBCC_TargetEnvironment *target_env,
                                  bool                   *is_signed_out,
                                  DBCC_Error            **error)
 {
-  ...
+  bool negate = false;
+  if (str[0] == '-')
+    {
+      str++;
+      length--;
+      if (length == 0)
+        {
+          *error = dbcc_error_new (DBCC_ERROR_BAD_NUMBER_CONSTANT,
+                                   "nothing after minus sign ('-')");
+          return true;
+        }
+      negate = true;
+    }
+  if (str[0] == '0')
+    {
+      if (str[1] == 'x')
+        {
+          str += 2;
+          length -= 2;
+          unsigned L;
+          for (L = 0; L < length; L++)
+            if (!is_hex_digit(str[L]))
+              break;
+          if (L == 0)
+            {
+              *error = dbcc_error_new (DBCC_ERROR_BAD_NUMBER_CONSTANT,
+                                       "must have exactly one hex digit after 0x");
+              return false;
+            }
+          str += L;
+          length -= L;
+          goto maybe_handle_suffix;
+        }
+      else
+        {
+          // octal (or simply 0)
+          unsigned L;
+          for (L = 1; L < length; L++)
+            if (!('0' <= str[L] && str[L] <= '7'))
+              break;
+        }
+      goto maybe_handle_suffix;
+    }
+  else if ('1' <= str[0] && str[0] <= '9')
+    {
+      unsigned L;
+      for (L = 1; L < length; L++)
+        if (!('0' <= str[L] && str[L] <= '9'))
+          break;
+      str += L;
+      length -= L;
+      goto maybe_handle_suffix;
+    }
+  else
+    {
+      *error = dbcc_error_new (DBCC_ERROR_BAD_NUMBER_CONSTANT,
+                               "bad character in number '%c'",
+                               str[0]);
+      return false;
+    }
+
+maybe_handle_suffix:
+  if (length > 0 && (*str == 'u' || *str == 'U'))
+    {
+      *is_signed_out = false;
+      length--;
+      str++;
+    }
+  else
+    *is_signed_out = true;
+
+  if (length >= 2
+   && ((str[0] == 'l' && str[1] == 'l')
+    || (str[0] == 'L' && str[1] == 'L')))
+    {
+      length -= 2;
+      str += 2;
+      *sizeof_int_type_out = target_env->sizeof_long_long_int;
+      return true;
+    }
+  if (length >= 1
+   && (str[0] == 'l' || str[0] == 'L'))
+    {
+      length -= 2;
+      str += 2;
+      *sizeof_int_type_out = target_env->sizeof_long_int;
+      return true;
+    }
+  if (length > 0)
+    {
+      *error = dbcc_error_new (DBCC_ERROR_BAD_NUMBER_CONSTANT,
+                               "integer constant followed by unexpected character %c", str[0]);
+       return false;
+    }
+  *sizeof_int_type_out = target_env->sizeof_int;
+  return true;
 }
 
+#if 0
 bool
 dbcc_common_floating_point_get_info(DBCC_TargetEnvironment *target_env,
                                     size_t          length,

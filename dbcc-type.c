@@ -325,12 +325,89 @@ dbcc_type_new_enum (DBCC_Namespace         *ns,
   t->v_enum.n_values = n_values;
   t->v_enum.values = DBCC_NEW_ARRAY(n_values, DBCC_EnumValue);
   t->base.sizeof_instance = ns->target_env->sizeof_int;
+  t->v_enum.values_sorted_by_sym = malloc (sizeof (size_t) * n_values);
   for (size_t i = 0; i < n_values; i++)
-    t->v_enum.values[i] = values[i];
+    {
+      t->v_enum.values[i] = values[i];
+      t->v_enum.values_sorted_by_sym[i] = i;
+      t->v_enum.values_sorted_by_value[i] = i;
+    }
+#define COMP_VIA(a,b, rv) { \
+  DBCC_Symbol *symbol_a = values[a].name; \
+  DBCC_Symbol *symbol_b = values[b].name; \
+  rv = (symbol_a < symbol_b) ? -1 : (symbol_a < symbol_b) ? 1 : 0; \
+}
+  DSK_QSORT(t->v_enum.values_sorted_by_sym, size_t, n_values, COMP_VIA);
+#undef COMP_VIA
+
+#define COMP_VIAV(a,b, rv) { \
+  int64_t value_a = values[a].value; \
+  int64_t value_b = values[b].value; \
+  rv = (value_a < value_b) ? -1 : (value_a < value_b) ? 1 : 0; \
+}
+  DSK_QSORT(t->v_enum.values_sorted_by_value, size_t, n_values, COMP_VIAV);
+#undef COMP_VIAV
 
   if (optional_tag != NULL)
-    dbcc_ptr_table_set (&ns->enum_tag_symbols, optional_tag, t);
+    dbcc_namespace_add_by_tag (ns, t);
+
   return t;
+}
+
+DBCC_EnumValue *
+dbcc_type_enum_lookup_value_by_name    (DBCC_Type *type,
+                                        DBCC_Symbol *name)
+{
+  size_t start = 0, n = type->v_enum.n_values;
+  while (n > 0)
+    {
+      size_t mid = start + n / 2;
+      DBCC_EnumValue *midval = type->v_enum.values
+                             + type->v_enum.values_sorted_by_sym[mid];
+      DBCC_Symbol *midsym = midval->name;
+      if (name < midsym)
+        {
+          n /= 2;
+        }
+      else if (name > midsym)
+        {
+          size_t new_start = mid + 1;
+          size_t new_n = start + n - new_start;
+          start = new_start;
+          n = new_n;
+        }
+      else
+        return midval;
+    }
+  return NULL;
+}
+
+DBCC_EnumValue *
+dbcc_type_enum_lookup_value            (DBCC_Type *type,
+                                        int64_t    value)
+{
+  size_t start = 0, n = type->v_enum.n_values;
+  while (n > 0)
+    {
+      size_t mid = start + n / 2;
+      DBCC_EnumValue *midval = type->v_enum.values
+                             + type->v_enum.values_sorted_by_value[mid];
+      int64_t midvalue = midval->value;
+      if (value < midvalue)
+        {
+          n /= 2;
+        }
+      else if (value > midvalue)
+        {
+          size_t new_start = mid + 1;
+          size_t new_n = start + n - new_start;
+          start = new_start;
+          n = new_n;
+        }
+      else
+        return midval;
+    }
+  return NULL;
 }
 
 DBCC_Type *
@@ -552,6 +629,34 @@ dbcc_type_complete_struct(DBCC_TargetEnvironment *env,
     return false;
   init_type_struct_members (env, type, n_members, members);
   return true;
+}
+
+DBCC_TypeStructMember *
+dbcc_type_struct_lookup_member (DBCC_Type *type,
+                                DBCC_Symbol *name)
+{
+  size_t start = 0, n = type->v_struct.n_members;
+  while (n > 0)
+    {
+      size_t mid = start + n / 2;
+      DBCC_TypeStructMember *midmem = type->v_struct.members
+                                    + type->v_struct.members_sorted_by_sym[mid];
+      DBCC_Symbol *midsym = midmem->name;
+      if (name < midsym)
+        {
+          n /= 2;
+        }
+      else if (name > midsym)
+        {
+          size_t new_start = mid + 1;
+          size_t new_n = start + n - new_start;
+          start = new_start;
+          n = new_n;
+        }
+      else
+        return midmem;
+    }
+  return NULL;
 }
 
 static void

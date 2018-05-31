@@ -90,6 +90,8 @@ struct DBCC_TypeEnum
   bool is_signed;
   size_t n_values;
   DBCC_EnumValue *values;
+  size_t *values_sorted_by_sym;
+  size_t *values_sorted_by_value;
 };
 struct DBCC_TypeArray
 {
@@ -212,8 +214,10 @@ DBCC_Type *dbcc_type_new_enum (DBCC_Namespace  *ns,
                                size_t           n_values,
                                DBCC_EnumValue  *values,
                                DBCC_Error     **error);
-DBCC_EnumValue *dbcc_type_enum_lookup_value (DBCC_Type *type,
-                                             int64_t value);
+DBCC_EnumValue *dbcc_type_enum_lookup_value_by_name (DBCC_Type *type,
+                                                     DBCC_Symbol *symbol);
+DBCC_EnumValue *dbcc_type_enum_lookup_value  (DBCC_Type *type,
+                                                     int64_t value);
 DBCC_Type *dbcc_type_new_pointer (DBCC_TargetEnvironment *target_env,
                                   DBCC_Type     *target);
 DBCC_Type *dbcc_type_new_array   (DBCC_TargetEnvironment *target,
