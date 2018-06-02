@@ -16,7 +16,7 @@
 %start_symbol evaluated_expression
 %type value {CPP_Expr_Result}
 %type evaluated_expression {CPP_Expr_Result}
-%extra_argument {CPP_Expr_Result *result}
+%extra_argument {CPP_EvalParserResult *result}
 
 %left LTLT GTGT.
 %left LOGICAL_OR.
@@ -31,7 +31,8 @@
 %destructor value {(void) $$; (void) result; }
 
 evaluated_expression(out) ::= value(in).
-        { *result = out = in;
+        { out = in;
+          result->result = out;
         }
 
 value(out) ::= NUMBER(n).

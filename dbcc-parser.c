@@ -1534,14 +1534,9 @@ tokens_to_boolean_value (DBCC_TargetEnvironment *target_env,
       *error = res.v_error;
       return false;
     }
-  if (eval_result.error != NULL)
-    {
-      *error = eval_result.error;
-      return false;
-    }
   assert(eval_result.finished);
   DBCC_CPPExpr_EvaluatorFree(lemon_parser, free);
-  *result_out = eval_result.bool_result;
+  *result_out = eval_result.result.v_int64 != 0;
   return true;
 
 
@@ -2049,6 +2044,36 @@ scan_maybe_hash_line (DBCC_Parser *parser,
     }
 }
 
+static CPP_Expr *copy_cpp_expr_densely (CPP_Expr *expr)
+{
+  size_t aligned_size = sizeof (CPP_Expr) + sizeof (CPP_Token) * expr->n_tokens;
+  size_t unaligned_size = 0;
+  for (unsigned i = 0; i < expr->n_tokens; i++)
+    {
+      unaligned_size += expr->tokens[i].length + 1;
+    }
+
+  /* Meaning:
+     for MACRO_ARGUMENT : index of the macro-argument
+     for STRING : whether "str" has been unquoted.
+                  (hack used to implement stringification)
+   */
+  CPP_Expr *rv = malloc (aligned_size + unaligned_size);
+  char *unaligned_at = (char*)rv + aligned_size;
+  *rv = *expr;
+  rv->tokens = (CPP_Token*) (rv + 1);
+  for (unsigned i = 0; i < expr->n_tokens; i++)
+    {
+      rv->tokens[i] = expr->tokens[i];
+      rv->tokens[i].str = unaligned_at;
+      memcpy (unaligned_at, expr->tokens[i].str, expr->tokens[i].length);
+      unaligned_at[expr->tokens[i].length] = 0;
+      if (rv->tokens[i].code_position != NULL)
+        dbcc_code_position_ref (rv->tokens[i].code_position);
+    }
+  return rv;
+}
+
 bool
 dbcc_parser_parse_file      (DBCC_Parser   *parser,
                              const char    *filename)
@@ -2059,7 +2084,8 @@ dbcc_parser_parse_file      (DBCC_Parser   *parser,
   uint8_t *contents = dsk_file_get_contents (filename, &size, &error);
   if (contents == NULL)
     {
-      DBCC_Error *e = dbcc_error_from_dsk_error (error);
+      DBCC_Error *e = dbcc_error_new (DBCC_ERROR_READING_FILE,
+                                      "%s", error->message);
       dsk_error_unref (error);
       parser->handlers.handle_error (e, parser->handler_data);
       return false;

@@ -138,13 +138,17 @@ typedef enum DBCC_TriState
 struct DBCC_String
 {
   size_t length;
-  char *str;
+
+  // 1 (for utf-8), 2 (for utf-16), 4 (for utf-32)
+  unsigned sizeof_elt;
+
+  void *str;
 };
 DBCC_INLINE void dbcc_string_clear (DBCC_String *clear)
 {
   if (clear->str)
     free (clear->str);
-  *clear = (DBCC_String){0, NULL};
+  *clear = (DBCC_String){0, 1, NULL};
 }
 
 // for struct members, (formal) function parameters, union cases,
@@ -213,25 +217,5 @@ void           dbcc_constant_free      (DBCC_Type *type,
 #include "dbcc-namespace.h"
 #include "dbcc-common.h"
 #include "dbcc-parser.h"
-
-#if 0
-// The C Grammar we use defines a Declaration as a tricky beast with a list of "Declarators",
-// which are intended to generally handle reasonable cases like:
-//       int x,y,z;
-// and unreasonable cases like:
-//       int x[10] = { [5] = 42 }, *y, (*z)(void*) = free;
-//
-// We will "normalize" the above so that each "declarator" becomes its own "declaration".
-// So it'd be equivalent to the longer form for the above "unreasonable" case:
-//       int x[10] = { [5] = 42 };
-//       int *y;
-//       int (*z)(void*) = free;
-struct DBCC_Declaration
-{
-  DBCC_Param param;
-  DBCC_Expr *init;              /* optional */
-};
-#endif
-
 
 #endif

@@ -1838,6 +1838,20 @@ dbcc_expr_new_char_constant    (DBCC_Type          *type,
   return expr;
 }
 
+DBCC_Expr *
+dbcc_expr_new_enum_constant (DBCC_Type       *type,
+                             DBCC_EnumValue     *enum_value)
+{
+  // ASSERT THAT 'type' is compat with 'enum_value'
+  DBCC_Expr *expr = expr_alloc (DBCC_EXPR_TYPE_CONSTANT);
+  expr->base.value_type = type;
+  expr->base.constant = malloc (sizeof (DBCC_Constant));
+  expr->base.constant->constant_type = DBCC_CONSTANT_TYPE_VALUE;
+  expr->base.constant->v_value.data = malloc (type->base.sizeof_instance);
+  dbcc_typed_value_set_int64 (type, expr->base.constant->v_value.data, enum_value->value);
+  return expr;
+}
+
 /* 6.5.3.3 Unary arithmetic operators
  */
 static bool
@@ -2668,4 +2682,97 @@ dbcc_expr_do_type_inference (DBCC_Namespace *ns,
 success:
   expr->base.types_inferred = true;
   return true;
+}
+
+static void
+structured_initializer_clear (DBCC_StructuredInitializer *kill)
+{
+  for (unsigned i = 0; i < kill->n_pieces; i++)
+    {
+      for (unsigned j = 0; j < kill->pieces[i].n_designators; j++)
+        {
+          switch (kill->pieces[i].designators[j].type)
+            {
+            case DBCC_DESIGNATOR_MEMBER:
+              break;
+            case DBCC_DESIGNATOR_INDEX:
+              dbcc_expr_destroy(kill->pieces[i].designators[j].v_index);
+              break;
+            }
+        }
+      if (kill->pieces[i].designators != NULL)
+        free (kill->pieces[i].designators);
+      if (kill->pieces[i].is_expr)
+        {
+          if (kill->pieces[i].v_expr != NULL)
+            dbcc_expr_destroy (kill->pieces[i].v_expr);
+        }
+      else
+        structured_initializer_clear (&kill->pieces[i].v_structured_initializer);
+    }
+  if (kill->pieces != NULL)
+    free (kill->pieces);
+}
+
+void
+dbcc_expr_destroy (DBCC_Expr *expr)
+{
+  switch (expr->expr_type)
+    {
+    case DBCC_EXPR_TYPE_UNARY_OP:
+      dbcc_expr_destroy (expr->v_unary.a);
+      break;
+    case DBCC_EXPR_TYPE_BINARY_OP:
+      dbcc_expr_destroy (expr->v_binary.a);
+      dbcc_expr_destroy (expr->v_binary.b);
+      break;
+    case DBCC_EXPR_TYPE_TERNARY_OP:
+      dbcc_expr_destroy (expr->v_ternary.condition);
+      dbcc_expr_destroy (expr->v_ternary.true_value);
+      dbcc_expr_destroy (expr->v_ternary.false_value);
+      break;
+    case DBCC_EXPR_TYPE_INPLACE_BINARY_OP:
+      dbcc_expr_destroy (expr->v_inplace_binary.inout);
+      dbcc_expr_destroy (expr->v_inplace_binary.b);
+      break;
+    case DBCC_EXPR_TYPE_INPLACE_UNARY_OP:
+      dbcc_expr_destroy (expr->v_inplace_unary.inout);
+      break;
+    case DBCC_EXPR_TYPE_CONSTANT:
+      break;
+    case DBCC_EXPR_TYPE_CALL:
+      if (expr->v_call.function_type != NULL)
+        dbcc_type_unref (expr->v_call.function_type);
+      if (expr->v_call.head != NULL)
+        dbcc_expr_destroy (expr->v_call.head);
+      for (size_t i = 0; i < expr->v_call.n_args; i++)
+        dbcc_expr_destroy (expr->v_call.args[i]);
+      if (expr->v_call.args != NULL)
+        free (expr->v_call.args);
+      break;
+    case DBCC_EXPR_TYPE_CAST:
+      if (expr->v_cast.pre_cast_expr != NULL)
+        dbcc_expr_destroy (expr->v_cast.pre_cast_expr);
+      break;
+    case DBCC_EXPR_TYPE_ACCESS:
+      if (expr->v_access.object != NULL)
+        dbcc_expr_destroy (expr->v_access.object);
+      break;
+    case DBCC_EXPR_TYPE_IDENTIFIER:
+      break;
+    case DBCC_EXPR_TYPE_STRUCTURED_INITIALIZER:
+      structured_initializer_clear (&expr->v_structured_initializer.initializer);
+      for (unsigned i = 0; i < expr->v_structured_initializer.n_flat_pieces; i++)
+        if (expr->v_structured_initializer.flat_pieces[i].piece_expr != NULL)
+          dbcc_expr_destroy (expr->v_structured_initializer.flat_pieces[i].piece_expr);
+      break;
+    }
+    
+  if (expr->base.code_position != NULL)
+    dbcc_code_position_unref (expr->base.code_position);
+  if (expr->base.constant != NULL)
+    dbcc_constant_free (expr->base.value_type, expr->base.constant);
+  if (expr->base.value_type != NULL)
+    dbcc_type_unref (expr->base.value_type);
+  free (expr);
 }

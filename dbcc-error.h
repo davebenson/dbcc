@@ -109,6 +109,9 @@ typedef enum
   /* static-evaluation errors */
   DBCC_ERROR_CASE_EXPR_NONCONSTANT,
 
+  /* I/O errors */
+  DBCC_ERROR_READING_FILE,
+
   /* type-checking errors */
 
   /* END ERROR CODES */

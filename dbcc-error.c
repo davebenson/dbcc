@@ -107,3 +107,4 @@ void        dbcc_error_add_code_position (DBCC_Error *error,
   DBCC_ErrorData_CodePosition *c = (DBCC_ErrorData_CodePosition *) add_data(error, DBCC_ERROR_DATA_TYPE_CODE_POSITION);
   c->code_position = code_position;
 }
+

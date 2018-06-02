@@ -1,10 +1,4 @@
 
-typedef struct {
-  DBCC_Error *error;
-  bool bool_result;
-  bool finished;
-} CPP_EvalParserResult;
-#define CPP_EVAL_PARSER_RESULT_INIT (CPP_EvalParserResult) {NULL, false, false}
 
 typedef enum {
   CPP_EXPR_RESULT_INT64,
@@ -20,12 +14,19 @@ struct CPP_Expr_Result
   };
 };
 
+typedef struct {
+  bool finished;
+  CPP_Expr_Result result;
+} CPP_EvalParserResult;
+#define CPP_EVAL_PARSER_RESULT_INIT \
+        (CPP_EvalParserResult) {false, {.type = CPP_EXPR_RESULT_FAIL}}
+
 void *DBCC_CPPExpr_EvaluatorAlloc(void *(*mallocProc)(size_t size));
 void DBCC_CPPExpr_Evaluator(
   void *yyp,                   /* The parser */
   int yymajor,                 /* The major token code number */
   CPP_Expr_Result yyminor,      /* The value for the token */
-  CPP_Expr_Result *eval_result
+  CPP_EvalParserResult *eval_result
 );
 void DBCC_CPPExpr_EvaluatorFree(
   void *p,                    /* The parser to be deleted */

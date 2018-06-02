@@ -1,4 +1,5 @@
 #include "dbcc.h"
+#include <ctype.h>
 
 bool dbcc_is_zero                    (size_t      length,
                                       const void *data)
@@ -241,7 +242,23 @@ dbcc_common_number_parse_int64  (size_t       length,
   return true;
 }
 
-#if 0
+/* 6.4.5 String literals
+ *
+ * p2  "A sequence of adjacent string literal tokens shall not include
+ *      both a wide string literal and a UTF−8 string literal."
+ * p3  "A character string literal is a sequence of zero
+ *      or more multibyte characters enclosed in
+ *      double-quotes, as in "xyz". A UTF−8 string literal is the same,
+ *      except prefixed by u8.  A wide string literal is the same,
+ *      except prefixed by the letter L, u, or U."
+ * p4  "The same considerations apply to each element of the sequence
+ *      in a string literal as if it were in an integer character constant
+ *      (for a character or UTF−8 string literal) or a wide
+ *      character constant (for a wide string literal), except that
+ *      the single-quote ' is representable either by itself or
+ *      by the escape sequence \', but the double-quote " shall
+ *      be represented by the escape sequence \".    "
+ */
 bool
 dbcc_common_string_literal_value (size_t       length,
                                   const char  *str,
@@ -250,7 +267,6 @@ dbcc_common_string_literal_value (size_t       length,
 {
   ...
 }
-#endif
 
 bool
 dbcc_common_integer_get_info    (DBCC_TargetEnvironment *target_env,
@@ -358,7 +374,20 @@ maybe_handle_suffix:
   return true;
 }
 
-#if 0
+/* 6.4.4.2 Floating constants.
+ *
+ * p2  "A floating constant has a significand part that may be followed
+ *      by an exponent part and a suffix that specifies its type.
+ *      The components of the significand part may include a digit
+ *      sequence representing the whole-number part,
+ *      followed by a period (.), followed by a
+ *      digit sequence representing the fraction part.
+ *      The components of the exponent part are an e, E, p, or P followed
+ *      by an exponent consisting of an optionally signed digit sequence.
+ *      Either the whole-number part or the fraction part has to be present;
+ *      for decimal floating constants, either the period or the exponent
+ *      part has to be present."
+ */
 bool
 dbcc_common_floating_point_get_info(DBCC_TargetEnvironment *target_env,
                                     size_t          length,
@@ -366,6 +395,72 @@ dbcc_common_floating_point_get_info(DBCC_TargetEnvironment *target_env,
                                     DBCC_FloatType *float_type_out,
                                     DBCC_Error    **error)
 {
-...
+#define TEST_END() \
+  if (skip == length) { \
+    *error = dbcc_error_new (DBCC_ERROR_BAD_NUMBER_CONSTANT, \
+                             "unexpected end-of-number"); \
+    return false; \
+  }
+  // is this hex or decimal floating-point?
+  unsigned skip = 0;
+  if (str[skip] == '+' || str[skip] == '-')
+    skip++;
+  TEST_END();
+  if (2 + skip < length && str[skip] == '0' && str[skip+1] == 'x')
+    {
+      skip += 2;
+      TEST_END();
+
+      // scan hex chars
+      while (skip < length && isxdigit (str[skip]))
+        skip++;
+
+      // scan optional exponent p/P (exponent is in decimal).
+      if (length > 0 && (str[skip] == 'p' || str[skip] == 'P'))
+        {
+          skip++;
+          TEST_END();
+          if (str[skip] == '+' || str[skip] == '-')
+            {
+              skip++;
+              TEST_END();
+            }
+          while (skip < length && isdigit (str[skip]))
+            skip++;
+        }
+    }
+  else if (!isdigit(str[skip]) && str[skip] != '.')
+    {
+      *error = dbcc_error_new (DBCC_ERROR_BAD_NUMBER_CONSTANT,
+                               "bad start character '%c' for number",
+                               str[skip]);
+      return false;
+    }
+  else
+    {
+      // skip decimal
+      while (skip < length && isdigit (str[skip]))
+        skip++;
+
+      // skip optional e/E
+      if (length > 0 && (str[skip] == 'e' || str[skip] == 'E'))
+        {
+          skip++;
+          TEST_END();
+          if (str[skip] == '+' || str[skip] == '-')
+            {
+              skip++;
+              TEST_END();
+            }
+          while (skip < length && isdigit (str[skip]))
+            skip++;
+        }
+    }
+  if (skip < length)
+    {
+      *error = dbcc_error_new (DBCC_ERROR_BAD_NUMBER_CONSTANT,
+                               "garbage after number");
+      return false;
+    }
+  return true;
 }
-#endif

@@ -1753,7 +1753,79 @@ void       dbcc_typed_value_set_int64(DBCC_Type  *type,
 }
 void       dbcc_typed_value_set_long_double (DBCC_Type *type,
                                       void *out,
-                                      long double v);
+                                      long double v)
+{
+  type = dbcc_type_dequalify (type);
+  if (type->metatype == DBCC_TYPE_METATYPE_FLOAT)
+    {
+      switch (type->v_float.float_type)
+        {
+        case DBCC_FLOAT_TYPE_FLOAT:
+          * (float *) out = v;
+          return;
+        case DBCC_FLOAT_TYPE_DOUBLE:
+          * (double *) out = v;
+          return;
+        case DBCC_FLOAT_TYPE_LONG_DOUBLE:
+          * (long double *) out = v;
+          return;
+        case DBCC_FLOAT_TYPE_COMPLEX_FLOAT:
+          * (float *) out = v;
+          ((float *) out)[1] = 0;
+          return;
+        case DBCC_FLOAT_TYPE_COMPLEX_DOUBLE:
+          * (double *) out = v;
+          ((double *) out)[1] = 0;
+          return;
+        case DBCC_FLOAT_TYPE_COMPLEX_LONG_DOUBLE:
+          * (long double *) out = v;
+          ((long double *) out)[1] = 0;
+          return;
+        default:
+          // imaginary types can't be set.
+          // fall to error case.
+          break;
+        }
+    }
+  else if (dbcc_type_is_unsigned (type))
+    {
+      switch (type->base.sizeof_instance)
+        {
+        case 1:
+          * (uint8_t *) out = (int8_t)(int) v;
+          return;
+        case 2:
+          * (uint16_t *) out = (int16_t) v;
+          return;
+        case 4:
+          * (uint32_t *) out = (int32_t) v;
+          return;
+        case 8:
+          * (uint64_t *) out = (int64_t) v;
+          return;
+        }
+    }
+  else
+    {
+      switch (type->base.sizeof_instance)
+        {
+        case 1:
+          * (int8_t *) out = (int8_t)(int)v;
+          return;
+        case 2:
+          * (int16_t *) out = (int16_t) v;
+          return;
+        case 4:
+          * (int32_t *) out = (int32_t) v;
+          return;
+        case 8:
+          * (int64_t *) out = (int64_t) v;
+          return;
+        }
+    }
+  assert(0);
+  return;
+}
 
 void *dbcc_typed_value_alloc_raw (DBCC_Type *type)
 {

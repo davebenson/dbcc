@@ -287,7 +287,8 @@ DBCC_Expr *dbcc_expr_new_int_constant     (DBCC_Type          *type,
                                            uint64_t            value);
 DBCC_Expr *dbcc_expr_new_string_constant  (DBCC_Namespace    *ns,
                                            const DBCC_String *constant);
-DBCC_Expr *dbcc_expr_new_enum_constant    (DBCC_EnumValue     *enum_value);
+DBCC_Expr *dbcc_expr_new_enum_constant    (DBCC_Type          *type,
+                                           DBCC_EnumValue     *enum_value);
 DBCC_Expr *dbcc_expr_new_float_constant   (DBCC_Namespace     *global_ns,
                                            DBCC_FloatType      float_type,
                                            long double         value);

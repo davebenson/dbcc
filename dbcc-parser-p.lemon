@@ -2008,7 +2008,7 @@ primary_expression(rv) ::= F_CONSTANT(c).
                                              c.v_f_constant.v_long_double);
           dbcc_expr_add_code_position (rv, c.code_position); }
 primary_expression(rv) ::= ENUMERATION_CONSTANT(c).
-        { rv = dbcc_expr_new_enum_constant (c.v_enum_value); }
+        { rv = dbcc_expr_new_enum_constant (c.v_enum_value.type, c.v_enum_value.enum_value); }
 primary_expression(rv) ::= CHAR_CONSTANT(c).
         { 
           DBCC_Type *t = dbcc_namespace_get_constant_char_type (c.v_char_constant.prefix);

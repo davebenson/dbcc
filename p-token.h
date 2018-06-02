@@ -46,7 +46,10 @@ struct P_Token
     DBCC_Symbol *v_func_name;
 
     // for ENUMERATION_CONSTANT
-    DBCC_EnumValue *v_enum_value;
+    struct {
+      DBCC_Type *type;
+      DBCC_EnumValue *enum_value;
+    } v_enum_value;
   };
 };
 

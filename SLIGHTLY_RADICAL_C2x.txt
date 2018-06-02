@@ -1,0 +1,41 @@
+
+operators:
+  &&= ||=      Short-circuiting (ie not evaluating the 2nd arg).
+
+  ^^=
+  ^^           Logical XOR
+
+  %%           Mod
+
+  **           Exponentiation
+
+
+
+declarations after case:
+
+   switch (x) {
+     case 1:   [Syntax error b/c declaration is not a labelable stmt]
+       int x = 0;      
+   }
+
+  If should behave exactly as though you added a ";".
+
+labels at end of compounds:
+   {
+     a = b;
+     if (d)
+       goto end;
+     b = c;
+   end:         // NOTE: not allowed in C11: semicolon required
+   }
+
+libffi functions
+   vacall
+   trampoline
+
+UTF-8 support
+  * source
+  * library
+
+
+Pre-defined _SIZEOF_INT etc.
